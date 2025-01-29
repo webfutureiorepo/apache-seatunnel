@@ -17,13 +17,19 @@
 
 package org.apache.seatunnel.translation.flink.sink;
 
-import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
+import org.apache.seatunnel.api.common.metrics.Counter;
+import org.apache.seatunnel.api.common.metrics.Meter;
+import org.apache.seatunnel.api.common.metrics.MetricNames;
+import org.apache.seatunnel.api.common.metrics.MetricsContext;
+import org.apache.seatunnel.api.sink.MultiTableResourceManager;
+import org.apache.seatunnel.api.sink.SupportResourceShare;
+import org.apache.seatunnel.api.sink.event.WriterCloseEvent;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
-import org.apache.seatunnel.translation.flink.serialization.FlinkRowConverter;
 
 import org.apache.flink.api.connector.sink.Sink;
 import org.apache.flink.api.connector.sink.SinkWriter;
-import org.apache.flink.types.Row;
+
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 import java.io.InvalidClassException;
@@ -40,36 +46,62 @@ import java.util.stream.Collectors;
  * @param <CommT> The generic type of commit message
  * @param <WriterStateT> The generic type of writer state
  */
+@Slf4j
 public class FlinkSinkWriter<InputT, CommT, WriterStateT>
         implements SinkWriter<InputT, CommitWrapper<CommT>, FlinkWriterState<WriterStateT>> {
 
     private final org.apache.seatunnel.api.sink.SinkWriter<SeaTunnelRow, CommT, WriterStateT>
             sinkWriter;
-    private final FlinkRowConverter rowSerialization;
+
+    private final org.apache.seatunnel.api.sink.SinkWriter.Context context;
+
+    private final Counter sinkWriteCount;
+
+    private final Counter sinkWriteBytes;
+
+    private final Meter sinkWriterQPS;
+
     private long checkpointId;
+
+    private MultiTableResourceManager resourceManager;
 
     FlinkSinkWriter(
             org.apache.seatunnel.api.sink.SinkWriter<SeaTunnelRow, CommT, WriterStateT> sinkWriter,
             long checkpointId,
-            SeaTunnelDataType<?> dataType) {
+            org.apache.seatunnel.api.sink.SinkWriter.Context context) {
+        this.context = context;
         this.sinkWriter = sinkWriter;
         this.checkpointId = checkpointId;
-        this.rowSerialization = new FlinkRowConverter(dataType);
+        MetricsContext metricsContext = context.getMetricsContext();
+        this.sinkWriteCount = metricsContext.counter(MetricNames.SINK_WRITE_COUNT);
+        this.sinkWriteBytes = metricsContext.counter(MetricNames.SINK_WRITE_BYTES);
+        this.sinkWriterQPS = metricsContext.meter(MetricNames.SINK_WRITE_QPS);
+        if (sinkWriter instanceof SupportResourceShare) {
+            resourceManager =
+                    ((SupportResourceShare) sinkWriter).initMultiTableResourceManager(1, 1);
+            ((SupportResourceShare) sinkWriter).setMultiTableResourceManager(resourceManager, 0);
+        }
     }
 
     @Override
     public void write(InputT element, SinkWriter.Context context) throws IOException {
-        if (element instanceof Row) {
-            sinkWriter.write(rowSerialization.reconvert((Row) element));
+        if (element == null) {
+            return;
+        }
+        if (element instanceof SeaTunnelRow) {
+            sinkWriter.write((SeaTunnelRow) element);
+            sinkWriteCount.inc();
+            sinkWriteBytes.inc(((SeaTunnelRow) element).getBytesSize());
+            sinkWriterQPS.markEvent();
         } else {
             throw new InvalidClassException(
-                    "only support Flink Row at now, the element Class is " + element.getClass());
+                    "only support SeaTunnelRow at now, the element Class is " + element.getClass());
         }
     }
 
     @Override
     public List<CommitWrapper<CommT>> prepareCommit(boolean flush) throws IOException {
-        Optional<CommT> commTOptional = sinkWriter.prepareCommit();
+        Optional<CommT> commTOptional = sinkWriter.prepareCommit(checkpointId);
         return commTOptional
                 .map(CommitWrapper::new)
                 .map(Collections::singletonList)
@@ -89,5 +121,13 @@ public class FlinkSinkWriter<InputT, CommT, WriterStateT>
     @Override
     public void close() throws Exception {
         sinkWriter.close();
+        context.getEventListener().onEvent(new WriterCloseEvent());
+        try {
+            if (resourceManager != null) {
+                resourceManager.close();
+            }
+        } catch (Throwable e) {
+            log.error("close resourceManager error", e);
+        }
     }
 }

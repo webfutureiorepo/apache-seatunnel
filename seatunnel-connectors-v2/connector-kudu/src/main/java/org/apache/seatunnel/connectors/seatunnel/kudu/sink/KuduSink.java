@@ -17,54 +17,53 @@
 
 package org.apache.seatunnel.connectors.seatunnel.kudu.sink;
 
-import org.apache.seatunnel.shade.com.typesafe.config.Config;
-
-import org.apache.seatunnel.api.common.PrepareFailException;
 import org.apache.seatunnel.api.sink.SeaTunnelSink;
 import org.apache.seatunnel.api.sink.SinkWriter;
-import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
+import org.apache.seatunnel.api.sink.SupportMultiTableSink;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
 import org.apache.seatunnel.connectors.seatunnel.common.sink.AbstractSimpleSink;
-import org.apache.seatunnel.connectors.seatunnel.common.sink.AbstractSinkWriter;
-
-import com.google.auto.service.AutoService;
+import org.apache.seatunnel.connectors.seatunnel.kudu.config.KuduSinkConfig;
+import org.apache.seatunnel.connectors.seatunnel.kudu.state.KuduAggregatedCommitInfo;
+import org.apache.seatunnel.connectors.seatunnel.kudu.state.KuduCommitInfo;
+import org.apache.seatunnel.connectors.seatunnel.kudu.state.KuduSinkState;
 
 import java.io.IOException;
+import java.util.Optional;
 
 /**
  * Kudu Sink implementation by using SeaTunnel sink API. This class contains the method to create
  * {@link AbstractSimpleSink}.
  */
-@AutoService(SeaTunnelSink.class)
-public class KuduSink extends AbstractSimpleSink<SeaTunnelRow, Void> {
+public class KuduSink
+        implements SeaTunnelSink<
+                        SeaTunnelRow, KuduSinkState, KuduCommitInfo, KuduAggregatedCommitInfo>,
+                SupportMultiTableSink {
 
-    private Config config;
-    private SeaTunnelRowType seaTunnelRowType;
+    private final KuduSinkConfig kuduSinkConfig;
+    private final SeaTunnelRowType seaTunnelRowType;
+
+    private final CatalogTable catalogTable;
+
+    public KuduSink(KuduSinkConfig kuduSinkConfig, CatalogTable catalogTable) {
+        this.kuduSinkConfig = kuduSinkConfig;
+        this.catalogTable = catalogTable;
+        this.seaTunnelRowType = catalogTable.getTableSchema().toPhysicalRowDataType();
+    }
 
     @Override
     public String getPluginName() {
-        return "kudu";
+        return "Kudu";
     }
 
     @Override
-    public void setTypeInfo(SeaTunnelRowType seaTunnelRowType) {
-        this.seaTunnelRowType = seaTunnelRowType;
+    public KuduSinkWriter createWriter(SinkWriter.Context context) throws IOException {
+        return new KuduSinkWriter(seaTunnelRowType, kuduSinkConfig);
     }
 
     @Override
-    public SeaTunnelDataType<SeaTunnelRow> getConsumedType() {
-        return this.seaTunnelRowType;
-    }
-
-    @Override
-    public void prepare(Config pluginConfig) throws PrepareFailException {
-        this.config = pluginConfig;
-    }
-
-    @Override
-    public AbstractSinkWriter<SeaTunnelRow, Void> createWriter(SinkWriter.Context context)
-            throws IOException {
-        return new KuduSinkWriter(seaTunnelRowType, config);
+    public Optional<CatalogTable> getWriteCatalogTable() {
+        return Optional.ofNullable(catalogTable);
     }
 }

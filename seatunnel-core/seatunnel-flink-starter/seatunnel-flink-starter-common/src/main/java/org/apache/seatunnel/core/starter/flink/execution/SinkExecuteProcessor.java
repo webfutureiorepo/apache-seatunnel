@@ -21,42 +21,54 @@ import org.apache.seatunnel.shade.com.typesafe.config.Config;
 
 import org.apache.seatunnel.api.common.CommonOptions;
 import org.apache.seatunnel.api.common.JobContext;
+import org.apache.seatunnel.api.common.PluginIdentifier;
 import org.apache.seatunnel.api.configuration.ReadonlyConfig;
-import org.apache.seatunnel.api.configuration.util.ConfigValidator;
-import org.apache.seatunnel.api.sink.DataSaveMode;
+import org.apache.seatunnel.api.sink.SaveModeExecuteWrapper;
+import org.apache.seatunnel.api.sink.SaveModeHandler;
 import org.apache.seatunnel.api.sink.SeaTunnelSink;
-import org.apache.seatunnel.api.sink.SupportDataSaveMode;
+import org.apache.seatunnel.api.sink.SupportMultiTableSink;
+import org.apache.seatunnel.api.sink.SupportSaveMode;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
+import org.apache.seatunnel.api.table.catalog.TableIdentifier;
+import org.apache.seatunnel.api.table.catalog.TablePath;
 import org.apache.seatunnel.api.table.factory.Factory;
+import org.apache.seatunnel.api.table.factory.FactoryUtil;
 import org.apache.seatunnel.api.table.factory.TableSinkFactory;
-import org.apache.seatunnel.api.table.factory.TableSinkFactoryContext;
-import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
-import org.apache.seatunnel.core.starter.enums.PluginType;
+import org.apache.seatunnel.api.table.type.SeaTunnelRow;
+import org.apache.seatunnel.common.exception.SeaTunnelRuntimeException;
 import org.apache.seatunnel.core.starter.exception.TaskExecuteException;
 import org.apache.seatunnel.core.starter.execution.PluginUtil;
-import org.apache.seatunnel.plugin.discovery.PluginIdentifier;
 import org.apache.seatunnel.plugin.discovery.seatunnel.SeaTunnelFactoryDiscovery;
 import org.apache.seatunnel.plugin.discovery.seatunnel.SeaTunnelSinkPluginDiscovery;
 import org.apache.seatunnel.translation.flink.sink.FlinkSink;
 
 import org.apache.flink.streaming.api.datastream.DataStreamSink;
 import org.apache.flink.streaming.api.transformations.SinkV1Adapter;
-import org.apache.flink.types.Row;
+
+import lombok.extern.slf4j.Slf4j;
 
 import java.net.URL;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.apache.seatunnel.api.common.CommonOptions.PLUGIN_NAME;
+import static org.apache.seatunnel.api.common.SeaTunnelAPIErrorCode.HANDLE_SAVE_MODE_FAILED;
 
+@Slf4j
+@SuppressWarnings("unchecked,rawtypes")
 public class SinkExecuteProcessor
         extends FlinkAbstractPluginExecuteProcessor<Optional<? extends Factory>> {
 
-    private static final String PLUGIN_TYPE = PluginType.SINK.getType();
-
     protected SinkExecuteProcessor(
-            List<URL> jarPaths, List<? extends Config> pluginConfigs, JobContext jobContext) {
-        super(jarPaths, pluginConfigs, jobContext);
+            List<URL> jarPaths,
+            Config envConfig,
+            List<? extends Config> pluginConfigs,
+            JobContext jobContext) {
+        super(jarPaths, envConfig, pluginConfigs, jobContext);
     }
 
     @Override
@@ -83,48 +95,49 @@ public class SinkExecuteProcessor
             throws TaskExecuteException {
         SeaTunnelSinkPluginDiscovery sinkPluginDiscovery =
                 new SeaTunnelSinkPluginDiscovery(ADD_URL_TO_CLASSLOADER);
-        DataStreamTableInfo input = upstreamDataStreams.get(0);
+        DataStreamTableInfo input = upstreamDataStreams.get(upstreamDataStreams.size() - 1);
         ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+        Function<PluginIdentifier, SeaTunnelSink> fallbackCreateSink =
+                sinkPluginDiscovery::createPluginInstance;
         for (int i = 0; i < plugins.size(); i++) {
+            Optional<? extends Factory> factory = plugins.get(i);
             Config sinkConfig = pluginConfigs.get(i);
             DataStreamTableInfo stream =
                     fromSourceTable(sinkConfig, upstreamDataStreams).orElse(input);
-            Optional<? extends Factory> factory = plugins.get(i);
-            boolean fallBack = !factory.isPresent() || isFallback(factory.get());
-            SeaTunnelSink sink;
-            if (fallBack) {
-                sink =
-                        fallbackCreateSink(
-                                sinkPluginDiscovery,
-                                PluginIdentifier.of(
-                                        ENGINE_TYPE,
-                                        PLUGIN_TYPE,
-                                        sinkConfig.getString(PLUGIN_NAME.key())),
-                                sinkConfig);
-                sink.setJobContext(jobContext);
-                SeaTunnelRowType sourceType = initSourceType(sinkConfig, stream.getDataStream());
-                sink.setTypeInfo(sourceType);
-            } else {
-                TableSinkFactoryContext context =
-                        new TableSinkFactoryContext(
-                                stream.getCatalogTable(),
+            Map<TablePath, SeaTunnelSink> sinks = new HashMap<>();
+            for (CatalogTable catalogTable : stream.getCatalogTables()) {
+                SeaTunnelSink sink =
+                        FactoryUtil.createAndPrepareSink(
+                                catalogTable,
                                 ReadonlyConfig.fromConfig(sinkConfig),
-                                classLoader);
-                ConfigValidator.of(context.getOptions()).validate(factory.get().optionRule());
-                sink = ((TableSinkFactory) factory.get()).createSink(context).createSink();
+                                classLoader,
+                                sinkConfig.getString(PLUGIN_NAME.key()),
+                                fallbackCreateSink,
+                                ((TableSinkFactory) (factory.orElse(null))));
                 sink.setJobContext(jobContext);
+                handleSaveMode(sink);
+                TableIdentifier tableId = catalogTable.getTableId();
+                sinks.put(tableId.toTablePath(), sink);
             }
-            if (SupportDataSaveMode.class.isAssignableFrom(sink.getClass())) {
-                SupportDataSaveMode saveModeSink = (SupportDataSaveMode) sink;
-                DataSaveMode dataSaveMode = saveModeSink.getUserConfigSaveMode();
-                saveModeSink.handleSaveMode(dataSaveMode);
-            }
-            DataStreamSink<Row> dataStreamSink =
+            SeaTunnelSink sink =
+                    tryGenerateMultiTableSink(
+                            sinks, ReadonlyConfig.fromConfig(sinkConfig), classLoader);
+            boolean sinkParallelism = sinkConfig.hasPath(CommonOptions.PARALLELISM.key());
+            boolean envParallelism = envConfig.hasPath(CommonOptions.PARALLELISM.key());
+            int parallelism =
+                    sinkParallelism
+                            ? sinkConfig.getInt(CommonOptions.PARALLELISM.key())
+                            : envParallelism
+                                    ? envConfig.getInt(CommonOptions.PARALLELISM.key())
+                                    : 1;
+            DataStreamSink<SeaTunnelRow> dataStreamSink =
                     stream.getDataStream()
-                            .sinkTo(SinkV1Adapter.wrap(new FlinkSink<>(sink)))
-                            .name(sink.getPluginName());
-            if (sinkConfig.hasPath(CommonOptions.PARALLELISM.key())) {
-                int parallelism = sinkConfig.getInt(CommonOptions.PARALLELISM.key());
+                            .sinkTo(
+                                    SinkV1Adapter.wrap(
+                                            new FlinkSink<>(
+                                                    sink, stream.getCatalogTables(), parallelism)))
+                            .name(String.format("%s-Sink", sink.getPluginName()));
+            if (sinkParallelism || envParallelism) {
                 dataStreamSink.setParallelism(parallelism);
             }
         }
@@ -132,26 +145,31 @@ public class SinkExecuteProcessor
         return null;
     }
 
-    public boolean isFallback(Factory factory) {
-        try {
-            ((TableSinkFactory) factory).createSink(null);
-        } catch (Exception e) {
-            if (e instanceof UnsupportedOperationException
-                    && "The Factory has not been implemented and the deprecated Plugin will be used."
-                            .equals(e.getMessage())) {
-                return true;
-            }
-            return true;
+    // if not support multi table, rollback
+    public SeaTunnelSink tryGenerateMultiTableSink(
+            Map<TablePath, SeaTunnelSink> sinks,
+            ReadonlyConfig sinkConfig,
+            ClassLoader classLoader) {
+        if (sinks.values().stream().anyMatch(sink -> !(sink instanceof SupportMultiTableSink))) {
+            log.info("Unsupported multi table sink api, rollback to sink template");
+            // choose the first sink
+            return sinks.values().iterator().next();
         }
-        return false;
+        return FactoryUtil.createMultiTableSink(sinks, sinkConfig, classLoader);
     }
 
-    public SeaTunnelSink fallbackCreateSink(
-            SeaTunnelSinkPluginDiscovery sinkPluginDiscovery,
-            PluginIdentifier pluginIdentifier,
-            Config pluginConfig) {
-        SeaTunnelSink source = sinkPluginDiscovery.createPluginInstance(pluginIdentifier);
-        source.prepare(pluginConfig);
-        return source;
+    public void handleSaveMode(SeaTunnelSink seaTunnelSink) {
+        if (seaTunnelSink instanceof SupportSaveMode) {
+            SupportSaveMode saveModeSink = (SupportSaveMode) seaTunnelSink;
+            Optional<SaveModeHandler> saveModeHandler = saveModeSink.getSaveModeHandler();
+            if (saveModeHandler.isPresent()) {
+                try (SaveModeHandler handler = saveModeHandler.get()) {
+                    handler.open();
+                    new SaveModeExecuteWrapper(handler).execute();
+                } catch (Exception e) {
+                    throw new SeaTunnelRuntimeException(HANDLE_SAVE_MODE_FAILED, e);
+                }
+            }
+        }
     }
 }

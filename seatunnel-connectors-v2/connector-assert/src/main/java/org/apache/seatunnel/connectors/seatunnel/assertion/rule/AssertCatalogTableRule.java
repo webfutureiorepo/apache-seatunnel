@@ -22,6 +22,7 @@ import org.apache.seatunnel.api.table.catalog.CatalogTable;
 import org.apache.seatunnel.api.table.catalog.Column;
 import org.apache.seatunnel.api.table.catalog.ConstraintKey;
 import org.apache.seatunnel.api.table.catalog.PrimaryKey;
+import org.apache.seatunnel.api.table.catalog.TableIdentifier;
 import org.apache.seatunnel.api.table.catalog.TableSchema;
 import org.apache.seatunnel.connectors.seatunnel.assertion.exception.AssertConnectorException;
 
@@ -33,6 +34,7 @@ import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
 import java.util.List;
+import java.util.Objects;
 
 import static org.apache.seatunnel.connectors.seatunnel.assertion.exception.AssertConnectorErrorCode.CATALOG_TABLE_FAILED;
 
@@ -48,6 +50,9 @@ public class AssertCatalogTableRule implements Serializable {
     @OptionMark(description = "column rule")
     private AssertColumnRule columnRule;
 
+    @OptionMark(description = "tableIdentifier rule")
+    private AssertTableIdentifierRule tableIdentifierRule;
+
     public void checkRule(CatalogTable catalogTable) {
         TableSchema tableSchema = catalogTable.getTableSchema();
         if (tableSchema == null) {
@@ -61,6 +66,9 @@ public class AssertCatalogTableRule implements Serializable {
         }
         if (columnRule != null) {
             columnRule.checkRule(tableSchema.getColumns());
+        }
+        if (tableIdentifierRule != null) {
+            tableIdentifierRule.checkRule(catalogTable.getTableId());
         }
     }
 
@@ -130,11 +138,51 @@ public class AssertCatalogTableRule implements Serializable {
             if (CollectionUtils.isEmpty(check)) {
                 throw new AssertConnectorException(CATALOG_TABLE_FAILED, "columns is null");
             }
-            if (CollectionUtils.isNotEmpty(columns)
-                    && !CollectionUtils.isEqualCollection(columns, check)) {
+
+            if (columns.size() != check.size()) {
                 throw new AssertConnectorException(
                         CATALOG_TABLE_FAILED,
                         String.format("columns: %s is not equal to %s", check, columns));
+            }
+            for (int i = 0; i < columns.size(); i++) {
+                if (!isColumnEqual(columns.get(i), check.get(i))) {
+                    throw new AssertConnectorException(
+                            CATALOG_TABLE_FAILED,
+                            String.format(
+                                    "columns: %s is not equal to %s",
+                                    check.get(i), columns.get(i)));
+                }
+            }
+        }
+    }
+
+    private static boolean isColumnEqual(Column column1, Column column2) {
+        return Objects.equals(column1.getName(), column2.getName())
+                && Objects.equals(column1.getDataType(), column2.getDataType())
+                && Objects.equals(column1.getColumnLength(), column2.getColumnLength())
+                && Objects.equals(column1.getScale(), column2.getScale())
+                && column1.isNullable() == column2.isNullable()
+                && Objects.equals(column1.getDefaultValue(), column2.getDefaultValue())
+                && Objects.equals(column1.getComment(), column2.getComment())
+                && Objects.equals(column1.getSourceType(), column2.getSourceType());
+    }
+
+    @Data
+    @AllArgsConstructor
+    public static class AssertTableIdentifierRule implements Serializable {
+
+        private TableIdentifier tableIdentifier;
+
+        public void checkRule(TableIdentifier actiualTableIdentifier) {
+            if (actiualTableIdentifier == null) {
+                throw new AssertConnectorException(CATALOG_TABLE_FAILED, "tableIdentifier is null");
+            }
+            if (!actiualTableIdentifier.equals(tableIdentifier)) {
+                throw new AssertConnectorException(
+                        CATALOG_TABLE_FAILED,
+                        String.format(
+                                "tableIdentifier: %s is not equal to %s",
+                                actiualTableIdentifier, tableIdentifier));
             }
         }
     }

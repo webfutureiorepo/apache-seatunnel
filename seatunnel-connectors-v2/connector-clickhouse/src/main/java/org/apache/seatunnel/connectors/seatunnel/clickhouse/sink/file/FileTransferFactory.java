@@ -17,21 +17,25 @@
 
 package org.apache.seatunnel.connectors.seatunnel.clickhouse.sink.file;
 
-import org.apache.seatunnel.common.exception.CommonErrorCode;
+import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.connectors.seatunnel.clickhouse.config.ClickhouseFileCopyMethod;
 import org.apache.seatunnel.connectors.seatunnel.clickhouse.exception.ClickhouseConnectorException;
 
 public class FileTransferFactory {
     public static FileTransfer createFileTransfer(
-            ClickhouseFileCopyMethod type, String host, String user, String password) {
+            ClickhouseFileCopyMethod type,
+            String host,
+            String user,
+            String password,
+            String keyPath) {
         switch (type) {
             case SCP:
-                return new ScpFileTransfer(host, user, password);
+                return new ScpFileTransfer(host, user, password, keyPath);
             case RSYNC:
-                return new RsyncFileTransfer(host, user, password);
+                return new RsyncFileTransfer(host, user, password, keyPath);
             default:
                 throw new ClickhouseConnectorException(
-                        CommonErrorCode.ILLEGAL_ARGUMENT,
+                        CommonErrorCodeDeprecated.ILLEGAL_ARGUMENT,
                         "unsupported clickhouse file copy method:" + type);
         }
     }

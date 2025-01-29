@@ -17,135 +17,46 @@
 
 package org.apache.seatunnel.core.starter.execution;
 
+import org.apache.seatunnel.shade.com.google.common.collect.Lists;
 import org.apache.seatunnel.shade.com.typesafe.config.Config;
 
-import org.apache.seatunnel.api.common.CommonOptions;
 import org.apache.seatunnel.api.common.JobContext;
-import org.apache.seatunnel.api.configuration.ReadonlyConfig;
-import org.apache.seatunnel.api.configuration.util.ConfigValidator;
+import org.apache.seatunnel.api.common.PluginIdentifier;
 import org.apache.seatunnel.api.source.SeaTunnelSource;
-import org.apache.seatunnel.api.table.catalog.CatalogTable;
-import org.apache.seatunnel.api.table.catalog.CatalogTableUtil;
-import org.apache.seatunnel.api.table.connector.TableSource;
 import org.apache.seatunnel.api.table.factory.Factory;
 import org.apache.seatunnel.api.table.factory.FactoryException;
-import org.apache.seatunnel.api.table.factory.TableSourceFactory;
-import org.apache.seatunnel.api.table.factory.TableSourceFactoryContext;
-import org.apache.seatunnel.api.table.factory.TableTransformFactory;
-import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
 import org.apache.seatunnel.common.constants.JobMode;
-import org.apache.seatunnel.common.utils.SeaTunnelException;
-import org.apache.seatunnel.plugin.discovery.PluginIdentifier;
 import org.apache.seatunnel.plugin.discovery.seatunnel.SeaTunnelFactoryDiscovery;
 import org.apache.seatunnel.plugin.discovery.seatunnel.SeaTunnelSinkPluginDiscovery;
-import org.apache.seatunnel.plugin.discovery.seatunnel.SeaTunnelSourcePluginDiscovery;
 import org.apache.seatunnel.plugin.discovery.seatunnel.SeaTunnelTransformPluginDiscovery;
-
-import com.google.common.collect.Lists;
 
 import java.net.URL;
 import java.util.List;
 import java.util.Optional;
 
 import static org.apache.seatunnel.api.common.CommonOptions.PLUGIN_NAME;
-import static org.apache.seatunnel.api.table.factory.FactoryUtil.DEFAULT_ID;
-import static org.apache.seatunnel.api.table.factory.FactoryUtil.discoverFactory;
 
 /** The util used for Spark/Flink to create to SeaTunnelSource etc. */
+@SuppressWarnings("rawtypes")
 public class PluginUtil {
 
     protected static final String ENGINE_TYPE = "seatunnel";
 
-    public static SourceTableInfo createSource(
+    public static Optional<? extends Factory> createTransformFactory(
             SeaTunnelFactoryDiscovery factoryDiscovery,
-            SeaTunnelSourcePluginDiscovery sourcePluginDiscovery,
-            PluginIdentifier pluginIdentifier,
-            Config pluginConfig,
-            JobContext jobContext) {
-        // get current thread classloader
-        ClassLoader classLoader =
-                Thread.currentThread()
-                        .getContextClassLoader(); // try to find factory of this plugin
-
-        final ReadonlyConfig readonlyConfig = ReadonlyConfig.fromConfig(pluginConfig);
-        // try to find table source factory
-        final Optional<Factory> sourceFactory =
-                factoryDiscovery.createOptionalPluginInstance(pluginIdentifier);
-        final boolean fallback = isFallback(sourceFactory);
-        SeaTunnelSource source;
-        if (fallback) {
-            source = fallbackCreate(sourcePluginDiscovery, pluginIdentifier, pluginConfig);
-        } else {
-            // create source with source factory
-            TableSourceFactoryContext context =
-                    new TableSourceFactoryContext(readonlyConfig, classLoader);
-            ConfigValidator.of(context.getOptions()).validate(sourceFactory.get().optionRule());
-            TableSource tableSource =
-                    ((TableSourceFactory) sourceFactory.get()).createSource(context);
-            source = tableSource.createSource();
-        }
-        source.setJobContext(jobContext);
-        ensureJobModeMatch(jobContext, source);
-        List<CatalogTable> catalogTables;
-        try {
-            catalogTables = source.getProducedCatalogTables();
-        } catch (UnsupportedOperationException e) {
-            // TODO remove it when all connector use `getProducedCatalogTables`
-            SeaTunnelDataType<?> seaTunnelDataType = source.getProducedType();
-            final String tableId =
-                    readonlyConfig.getOptional(CommonOptions.RESULT_TABLE_NAME).orElse(DEFAULT_ID);
-            catalogTables =
-                    CatalogTableUtil.convertDataTypeToCatalogTables(seaTunnelDataType, tableId);
-        }
-
-        if (catalogTables.size() != 1) {
-            throw new SeaTunnelException(
-                    String.format("Unsupported table number: %d on flink", catalogTables.size()));
-        }
-        return new SourceTableInfo(source, catalogTables);
-    }
-
-    private static boolean isFallback(Optional<Factory> factory) {
-        if (!factory.isPresent()) {
-            return true;
-        }
-        try {
-            ((TableSourceFactory) factory.get()).createSource(null);
-        } catch (Exception e) {
-            if (e instanceof UnsupportedOperationException
-                    && "The Factory has not been implemented and the deprecated Plugin will be used."
-                            .equals(e.getMessage())) {
-                return true;
-            }
-            return true;
-        }
-        return false;
-    }
-
-    private static SeaTunnelSource fallbackCreate(
-            SeaTunnelSourcePluginDiscovery sourcePluginDiscovery,
-            PluginIdentifier pluginIdentifier,
-            Config pluginConfig) {
-        SeaTunnelSource source = sourcePluginDiscovery.createPluginInstance(pluginIdentifier);
-        source.prepare(pluginConfig);
-        return source;
-    }
-
-    public static TableTransformFactory createTransformFactory(
             SeaTunnelTransformPluginDiscovery transformPluginDiscovery,
             Config transformConfig,
             List<URL> pluginJars) {
         PluginIdentifier pluginIdentifier =
                 PluginIdentifier.of(
                         ENGINE_TYPE, "transform", transformConfig.getString(PLUGIN_NAME.key()));
-        final ReadonlyConfig readonlyConfig = ReadonlyConfig.fromConfig(transformConfig);
-        final String factoryId = readonlyConfig.get(PLUGIN_NAME);
-        ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
-        final TableTransformFactory factory =
-                discoverFactory(classLoader, TableTransformFactory.class, factoryId);
         pluginJars.addAll(
                 transformPluginDiscovery.getPluginJarPaths(Lists.newArrayList(pluginIdentifier)));
-        return factory;
+        try {
+            return factoryDiscovery.createOptionalPluginInstance(pluginIdentifier);
+        } catch (FactoryException e) {
+            return Optional.empty();
+        }
     }
 
     public static Optional<? extends Factory> createSinkFactory(

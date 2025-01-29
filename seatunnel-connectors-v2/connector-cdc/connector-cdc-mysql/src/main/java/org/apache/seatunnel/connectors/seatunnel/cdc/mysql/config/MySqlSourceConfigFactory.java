@@ -26,10 +26,11 @@ import io.debezium.connector.mysql.MySqlConnectorConfig;
 import java.util.Properties;
 import java.util.UUID;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.seatunnel.shade.com.google.common.base.Preconditions.checkNotNull;
 
 /** A factory to initialize {@link MySqlSourceConfig}. */
 public class MySqlSourceConfigFactory extends JdbcSourceConfigFactory {
+    public static final String SCHEMA_CHANGE_KEY = "include.schema.changes";
 
     private ServerIdRange serverIdRange;
 
@@ -39,8 +40,8 @@ public class MySqlSourceConfigFactory extends JdbcSourceConfigFactory {
      * required when 'scan.incremental.snapshot.enabled' enabled. Every ID must be unique across all
      * currently-running database processes in the MySQL cluster. This connector joins the MySQL
      * cluster as another server (with this unique ID) so it can read the binlog. By default, a
-     * random number is generated between 5400 and 6400, though we recommend setting an explicit
-     * value."
+     * random number is generated between 6500 and 2,148,492,146, though we recommend setting an
+     * explicit value."
      */
     public MySqlSourceConfigFactory serverId(String serverId) {
         this.serverIdRange = ServerIdRange.from(serverId);
@@ -76,8 +77,8 @@ public class MySqlSourceConfigFactory extends JdbcSourceConfigFactory {
         // Note: the includeSchemaChanges parameter is used to control emitting the schema record,
         // only DataStream API program need to emit the schema record, the Table API need not
 
-        // TODO Not yet supported
-        props.setProperty("include.schema.changes", String.valueOf(false));
+        // setting debezium capture mysql ddl
+        props.setProperty(SCHEMA_CHANGE_KEY, String.valueOf(schemaChangeEnabled));
         // disable the offset flush totally
         props.setProperty("offset.flush.interval.ms", String.valueOf(Long.MAX_VALUE));
         // disable tombstones
@@ -94,9 +95,13 @@ public class MySqlSourceConfigFactory extends JdbcSourceConfigFactory {
         }
         if (databaseList != null) {
             props.setProperty("database.include.list", String.join(",", databaseList));
+        } else if (databasePattern != null) {
+            props.setProperty("database.include.list", databasePattern);
         }
         if (tableList != null) {
             props.setProperty("table.include.list", String.join(",", tableList));
+        } else if (tablePattern != null) {
+            props.setProperty("table.include.list", tablePattern);
         }
         if (serverTimeZone != null) {
             props.setProperty("database.serverTimezone", serverTimeZone);
@@ -115,6 +120,7 @@ public class MySqlSourceConfigFactory extends JdbcSourceConfigFactory {
                 databaseList,
                 tableList,
                 splitSize,
+                splitColumn,
                 distributionFactorUpper,
                 distributionFactorLower,
                 sampleShardingThreshold,

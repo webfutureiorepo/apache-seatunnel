@@ -21,7 +21,9 @@ import org.apache.seatunnel.api.common.metrics.MetricTags;
 import org.apache.seatunnel.api.common.metrics.MetricsContext;
 import org.apache.seatunnel.api.table.type.Record;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
+import org.apache.seatunnel.api.tracing.MDCTracer;
 import org.apache.seatunnel.common.utils.function.ConsumerWithException;
+import org.apache.seatunnel.engine.common.utils.concurrent.CompletableFuture;
 import org.apache.seatunnel.engine.core.checkpoint.InternalCheckpointListener;
 import org.apache.seatunnel.engine.core.dag.actions.Action;
 import org.apache.seatunnel.engine.core.dag.actions.ShuffleAction;
@@ -29,6 +31,7 @@ import org.apache.seatunnel.engine.core.dag.actions.SinkAction;
 import org.apache.seatunnel.engine.core.dag.actions.SourceAction;
 import org.apache.seatunnel.engine.core.dag.actions.TransformChainAction;
 import org.apache.seatunnel.engine.core.dag.actions.UnknownActionException;
+import org.apache.seatunnel.engine.core.job.ConnectorJarIdentifier;
 import org.apache.seatunnel.engine.server.checkpoint.ActionStateKey;
 import org.apache.seatunnel.engine.server.checkpoint.ActionSubtaskState;
 import org.apache.seatunnel.engine.server.checkpoint.CheckpointBarrier;
@@ -73,7 +76,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
@@ -290,6 +292,11 @@ public abstract class SeaTunnelTask extends AbstractTask {
         return getFlowInfo((action, set) -> set.addAll(action.getJarUrls()));
     }
 
+    @Override
+    public Set<ConnectorJarIdentifier> getConnectorPluginJars() {
+        return getFlowInfo((action, set) -> set.addAll(action.getConnectorJarIdentifiers()));
+    }
+
     public Set<ActionStateKey> getActionStateKeys() {
         return getFlowInfo((action, set) -> set.add(ActionStateKey.of(action)));
     }
@@ -316,8 +323,7 @@ public abstract class SeaTunnelTask extends AbstractTask {
     @Override
     public void close() throws IOException {
         super.close();
-        allCycles
-                .parallelStream()
+        MDCTracer.tracing(allCycles.parallelStream())
                 .forEach(
                         flowLifeCycle -> {
                             try {
@@ -333,7 +339,8 @@ public abstract class SeaTunnelTask extends AbstractTask {
         Integer ackSize =
                 cycleAcks.compute(barrier.getId(), (id, count) -> count == null ? 1 : ++count);
         if (ackSize == allCycles.size()) {
-            if (barrier.prepareClose()) {
+            cycleAcks.remove(barrier.getId());
+            if (barrier.prepareClose(this.taskLocation)) {
                 this.prepareCloseStatus = true;
                 this.prepareCloseBarrierId.set(barrier.getId());
             }

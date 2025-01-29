@@ -17,13 +17,14 @@
 
 package org.apache.seatunnel.connectors.seatunnel.jdbc.internal.dialect.tablestore;
 
-import org.apache.seatunnel.connectors.seatunnel.jdbc.config.JdbcSourceConfig;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.internal.converter.JdbcRowConverter;
+import org.apache.seatunnel.connectors.seatunnel.jdbc.internal.dialect.DatabaseIdentifier;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.internal.dialect.JdbcDialect;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.internal.dialect.JdbcDialectTypeMapper;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.Optional;
@@ -31,7 +32,7 @@ import java.util.Optional;
 public class TablestoreDialect implements JdbcDialect {
     @Override
     public String dialectName() {
-        return "Tablestore";
+        return DatabaseIdentifier.TABLE_STORE;
     }
 
     @Override
@@ -59,9 +60,11 @@ public class TablestoreDialect implements JdbcDialect {
     }
 
     @Override
-    public ResultSetMetaData getResultSetMetaData(
-            Connection conn, JdbcSourceConfig jdbcSourceConfig) throws SQLException {
-        PreparedStatement ps = conn.prepareStatement(jdbcSourceConfig.getQuery());
-        return ps.executeQuery().getMetaData();
+    public ResultSetMetaData getResultSetMetaData(Connection conn, String query)
+            throws SQLException {
+        try (PreparedStatement preparedStatement = conn.prepareStatement(query);
+                ResultSet resultSet = preparedStatement.executeQuery()) {
+            return resultSet.getMetaData();
+        }
     }
 }

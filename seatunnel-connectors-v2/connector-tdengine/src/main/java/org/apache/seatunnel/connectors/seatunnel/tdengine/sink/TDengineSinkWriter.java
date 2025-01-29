@@ -17,11 +17,13 @@
 
 package org.apache.seatunnel.connectors.seatunnel.tdengine.sink;
 
+import org.apache.seatunnel.shade.com.google.common.base.Throwables;
+import org.apache.seatunnel.shade.com.google.common.collect.Lists;
 import org.apache.seatunnel.shade.com.typesafe.config.Config;
 
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
-import org.apache.seatunnel.common.exception.CommonErrorCode;
+import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.connectors.seatunnel.common.sink.AbstractSinkWriter;
 import org.apache.seatunnel.connectors.seatunnel.tdengine.config.TDengineSourceConfig;
 import org.apache.seatunnel.connectors.seatunnel.tdengine.exception.TDengineConnectorException;
@@ -29,8 +31,6 @@ import org.apache.seatunnel.connectors.seatunnel.tdengine.exception.TDengineConn
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 
-import com.google.common.base.Throwables;
-import com.google.common.collect.Lists;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 
@@ -45,6 +45,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Objects;
+
+import static org.apache.seatunnel.connectors.seatunnel.tdengine.utils.TDengineUtil.checkDriverExist;
 
 @Slf4j
 public class TDengineSinkWriter extends AbstractSinkWriter<SeaTunnelRow, Void> {
@@ -66,11 +68,14 @@ public class TDengineSinkWriter extends AbstractSinkWriter<SeaTunnelRow, Void> {
                         config.getUsername(),
                         "&password=",
                         config.getPassword());
+        // check td driver whether exist and if not, try to register
+        checkDriverExist(jdbcUrl);
         conn = DriverManager.getConnection(jdbcUrl);
-        try (Statement statement = conn.createStatement()) {
-            final ResultSet metaResultSet =
-                    statement.executeQuery(
-                            "desc " + config.getDatabase() + "." + config.getStable());
+        try (Statement statement = conn.createStatement();
+                final ResultSet metaResultSet =
+                        statement.executeQuery(
+                                "desc " + config.getDatabase() + "." + config.getStable())) {
+
             while (metaResultSet.next()) {
                 if (StringUtils.equals("TAG", metaResultSet.getString("note"))) {
                     tagsNum++;
@@ -104,7 +109,8 @@ public class TDengineSinkWriter extends AbstractSinkWriter<SeaTunnelRow, Void> {
             if (rowCount == 0) {
                 Throwables.propagateIfPossible(
                         new TDengineConnectorException(
-                                CommonErrorCode.SQL_OPERATION_FAILED, "insert error:" + element));
+                                CommonErrorCodeDeprecated.SQL_OPERATION_FAILED,
+                                "insert error:" + element));
             }
         }
     }
@@ -116,7 +122,7 @@ public class TDengineSinkWriter extends AbstractSinkWriter<SeaTunnelRow, Void> {
                 conn.close();
             } catch (SQLException e) {
                 throw new TDengineConnectorException(
-                        CommonErrorCode.WRITER_OPERATION_FAILED,
+                        CommonErrorCodeDeprecated.WRITER_OPERATION_FAILED,
                         "TDengine writer connection close failed",
                         e);
             }

@@ -17,8 +17,8 @@
 
 package org.apache.seatunnel.translation.flink.sink;
 
-import org.apache.seatunnel.api.sink.DefaultSinkWriterContext;
 import org.apache.seatunnel.api.sink.SeaTunnelSink;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.translation.flink.serialization.CommitWrapperSerializer;
 import org.apache.seatunnel.translation.flink.serialization.FlinkSimpleVersionedSerializer;
@@ -48,8 +48,17 @@ public class FlinkSink<InputT, CommT, WriterStateT, GlobalCommT>
 
     private final SeaTunnelSink<SeaTunnelRow, WriterStateT, CommT, GlobalCommT> sink;
 
-    public FlinkSink(SeaTunnelSink<SeaTunnelRow, WriterStateT, CommT, GlobalCommT> sink) {
+    private final List<CatalogTable> catalogTables;
+
+    private final int parallelism;
+
+    public FlinkSink(
+            SeaTunnelSink<SeaTunnelRow, WriterStateT, CommT, GlobalCommT> sink,
+            List<CatalogTable> catalogTables,
+            int parallelism) {
         this.sink = sink;
+        this.catalogTables = catalogTables;
+        this.parallelism = parallelism;
     }
 
     @Override
@@ -57,17 +66,16 @@ public class FlinkSink<InputT, CommT, WriterStateT, GlobalCommT>
             Sink.InitContext context, List<FlinkWriterState<WriterStateT>> states)
             throws IOException {
         org.apache.seatunnel.api.sink.SinkWriter.Context stContext =
-                new DefaultSinkWriterContext(context.getSubtaskId());
-
+                new FlinkSinkWriterContext(context, parallelism);
         if (states == null || states.isEmpty()) {
-            return new FlinkSinkWriter<>(sink.createWriter(stContext), 1, sink.getConsumedType());
+            return new FlinkSinkWriter<>(sink.createWriter(stContext), 1, stContext);
         } else {
             List<WriterStateT> restoredState =
                     states.stream().map(FlinkWriterState::getState).collect(Collectors.toList());
             return new FlinkSinkWriter<>(
                     sink.restoreWriter(stContext, restoredState),
                     states.get(0).getCheckpointId() + 1,
-                    sink.getConsumedType());
+                    stContext);
         }
     }
 
@@ -84,12 +92,30 @@ public class FlinkSink<InputT, CommT, WriterStateT, GlobalCommT>
 
     @Override
     public Optional<SimpleVersionedSerializer<CommitWrapper<CommT>>> getCommittableSerializer() {
-        return sink.getCommitInfoSerializer().map(CommitWrapperSerializer::new);
+        try {
+            if (sink.createCommitter().isPresent()
+                    || sink.createAggregatedCommitter().isPresent()) {
+                return sink.getCommitInfoSerializer().map(CommitWrapperSerializer::new);
+            } else {
+                return Optional.empty();
+            }
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to create Committer or AggregatedCommitter", e);
+        }
     }
 
     @Override
     public Optional<SimpleVersionedSerializer<GlobalCommT>> getGlobalCommittableSerializer() {
-        return sink.getAggregatedCommitInfoSerializer().map(FlinkSimpleVersionedSerializer::new);
+        try {
+            if (sink.createAggregatedCommitter().isPresent()) {
+                return sink.getAggregatedCommitInfoSerializer()
+                        .map(FlinkSimpleVersionedSerializer::new);
+            } else {
+                return Optional.empty();
+            }
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to create AggregatedCommitter", e);
+        }
     }
 
     @Override

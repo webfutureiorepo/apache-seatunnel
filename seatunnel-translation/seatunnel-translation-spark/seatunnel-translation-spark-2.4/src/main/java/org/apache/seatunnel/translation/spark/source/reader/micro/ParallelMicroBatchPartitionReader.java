@@ -21,6 +21,7 @@ import org.apache.seatunnel.api.source.SeaTunnelSource;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.common.utils.SerializationUtils;
 import org.apache.seatunnel.translation.source.BaseSourceFunction;
+import org.apache.seatunnel.translation.spark.execution.MultiTableManager;
 import org.apache.seatunnel.translation.spark.source.reader.batch.ParallelBatchPartitionReader;
 import org.apache.seatunnel.translation.spark.source.state.ReaderState;
 import org.apache.seatunnel.translation.util.ThreadPoolExecutorFactory;
@@ -58,13 +59,16 @@ public class ParallelMicroBatchPartitionReader extends ParallelBatchPartitionRea
     public ParallelMicroBatchPartitionReader(
             SeaTunnelSource<SeaTunnelRow, ?, ?> source,
             Integer parallelism,
+            String jobId,
             Integer subtaskId,
             Integer checkpointId,
             Integer checkpointInterval,
             String checkpointPath,
             String hdfsRoot,
-            String hdfsUser) {
-        super(source, parallelism, subtaskId);
+            String hdfsUser,
+            Map<String, String> envOptions,
+            MultiTableManager multiTableManager) {
+        super(source, parallelism, jobId, subtaskId, envOptions, multiTableManager);
         this.checkpointId = checkpointId;
         this.checkpointInterval = checkpointInterval;
         this.checkpointPath = checkpointPath;
@@ -74,7 +78,7 @@ public class ParallelMicroBatchPartitionReader extends ParallelBatchPartitionRea
 
     @Override
     protected BaseSourceFunction<SeaTunnelRow> createInternalSource() {
-        return new InternalParallelSource<>(source, restoredState, parallelism, subtaskId);
+        return new InternalParallelSource<>(source, restoredState, parallelism, jobId, subtaskId);
     }
 
     @Override

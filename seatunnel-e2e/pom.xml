@@ -31,12 +31,12 @@
         <module>seatunnel-connector-v2-e2e</module>
         <module>seatunnel-engine-e2e</module>
         <module>seatunnel-transforms-v2-e2e</module>
+        <module>seatunnel-core-e2e</module>
     </modules>
 
     <properties>
-        <junit4.version>4.13.2</junit4.version>
         <maven-jar-plugin.version>2.4</maven-jar-plugin.version>
-        <rest-assured.version>4.3.1</rest-assured.version>
+        <rest-assured.version>5.4.0</rest-assured.version>
     </properties>
     <dependencies>
         <dependency>
@@ -60,6 +60,12 @@
             <artifactId>rest-assured</artifactId>
             <version>${rest-assured.version}</version>
             <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.codehaus.groovy</groupId>
+                    <artifactId>groovy</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>io.rest-assured</groupId>

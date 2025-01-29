@@ -17,16 +17,26 @@
 
 package org.apache.seatunnel.connectors.seatunnel.elasticsearch.sink;
 
-import org.apache.seatunnel.shade.com.typesafe.config.Config;
-
+import org.apache.seatunnel.api.configuration.ReadonlyConfig;
 import org.apache.seatunnel.api.sink.SinkWriter;
+import org.apache.seatunnel.api.sink.SupportMultiTableSinkWriter;
+import org.apache.seatunnel.api.sink.SupportSchemaEvolutionSinkWriter;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
+import org.apache.seatunnel.api.table.catalog.Column;
+import org.apache.seatunnel.api.table.converter.BasicTypeDefine;
+import org.apache.seatunnel.api.table.schema.event.AlterTableAddColumnEvent;
+import org.apache.seatunnel.api.table.schema.event.AlterTableColumnEvent;
+import org.apache.seatunnel.api.table.schema.event.AlterTableColumnsEvent;
+import org.apache.seatunnel.api.table.schema.event.SchemaChangeEvent;
 import org.apache.seatunnel.api.table.type.RowKind;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
-import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
-import org.apache.seatunnel.common.exception.CommonErrorCode;
+import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.common.utils.RetryUtils;
 import org.apache.seatunnel.common.utils.RetryUtils.RetryMaterial;
+import org.apache.seatunnel.common.utils.SeaTunnelException;
+import org.apache.seatunnel.connectors.seatunnel.elasticsearch.catalog.ElasticSearchTypeConverter;
 import org.apache.seatunnel.connectors.seatunnel.elasticsearch.client.EsRestClient;
+import org.apache.seatunnel.connectors.seatunnel.elasticsearch.client.EsType;
 import org.apache.seatunnel.connectors.seatunnel.elasticsearch.dto.BulkResponse;
 import org.apache.seatunnel.connectors.seatunnel.elasticsearch.dto.IndexInfo;
 import org.apache.seatunnel.connectors.seatunnel.elasticsearch.exception.ElasticsearchConnectorErrorCode;
@@ -48,9 +58,11 @@ import java.util.Optional;
  */
 @Slf4j
 public class ElasticsearchSinkWriter
-        implements SinkWriter<SeaTunnelRow, ElasticsearchCommitInfo, ElasticsearchSinkState> {
+        implements SinkWriter<SeaTunnelRow, ElasticsearchCommitInfo, ElasticsearchSinkState>,
+                SupportMultiTableSinkWriter<Void>,
+                SupportSchemaEvolutionSinkWriter {
 
-    private final SinkWriter.Context context;
+    private final Context context;
 
     private final int maxBatchSize;
 
@@ -59,21 +71,25 @@ public class ElasticsearchSinkWriter
     private EsRestClient esRestClient;
     private RetryMaterial retryMaterial;
     private static final long DEFAULT_SLEEP_TIME_MS = 200L;
+    private final IndexInfo indexInfo;
 
     public ElasticsearchSinkWriter(
-            SinkWriter.Context context,
-            SeaTunnelRowType seaTunnelRowType,
-            Config pluginConfig,
+            Context context,
+            CatalogTable catalogTable,
+            ReadonlyConfig config,
             int maxBatchSize,
             int maxRetryCount) {
         this.context = context;
         this.maxBatchSize = maxBatchSize;
 
-        IndexInfo indexInfo = new IndexInfo(pluginConfig);
-        esRestClient = EsRestClient.createInstance(pluginConfig);
+        this.indexInfo =
+                new IndexInfo(catalogTable.getTableId().getTableName().toLowerCase(), config);
+        esRestClient = EsRestClient.createInstance(config);
         this.seaTunnelRowSerializer =
                 new ElasticsearchRowSerializer(
-                        esRestClient.getClusterInfo(), indexInfo, seaTunnelRowType);
+                        esRestClient.getClusterInfo(),
+                        indexInfo,
+                        catalogTable.getSeaTunnelRowType());
 
         this.requestEsList = new ArrayList<>(maxBatchSize);
         this.retryMaterial =
@@ -90,6 +106,32 @@ public class ElasticsearchSinkWriter
         requestEsList.add(indexRequestRow);
         if (requestEsList.size() >= maxBatchSize) {
             bulkEsWithRetry(this.esRestClient, this.requestEsList);
+        }
+    }
+
+    @Override
+    public void applySchemaChange(SchemaChangeEvent event) throws IOException {
+        if (event instanceof AlterTableColumnsEvent) {
+            for (AlterTableColumnEvent columnEvent : ((AlterTableColumnsEvent) event).getEvents()) {
+                applySingleSchemaChangeEvent(columnEvent);
+            }
+        } else if (event instanceof AlterTableColumnEvent) {
+            applySingleSchemaChangeEvent(event);
+        } else {
+            throw new UnsupportedOperationException("Unsupported alter table event: " + event);
+        }
+    }
+
+    private void applySingleSchemaChangeEvent(SchemaChangeEvent event) {
+        if (event instanceof AlterTableAddColumnEvent) {
+            AlterTableAddColumnEvent addColumnEvent = (AlterTableAddColumnEvent) event;
+            Column column = addColumnEvent.getColumn();
+            BasicTypeDefine<EsType> reconvert =
+                    ElasticSearchTypeConverter.INSTANCE.reconvert(column);
+            esRestClient.addField(indexInfo.getIndex(), reconvert);
+            log.info("Add column {} to index {}", column.getName(), indexInfo.getIndex());
+        } else {
+            throw new SeaTunnelException("Unsupported schemaChangeEvent : " + event.getEventType());
         }
     }
 
@@ -123,7 +165,7 @@ public class ElasticsearchSinkWriter
             requestEsList.clear();
         } catch (Exception e) {
             throw new ElasticsearchConnectorException(
-                    CommonErrorCode.SQL_OPERATION_FAILED,
+                    CommonErrorCodeDeprecated.SQL_OPERATION_FAILED,
                     "ElasticSearch execute batch statement error",
                     e);
         }

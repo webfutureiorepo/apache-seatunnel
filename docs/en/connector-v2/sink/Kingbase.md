@@ -30,13 +30,13 @@
 
 ## Database Dependency
 
-> Please download the support list corresponding to 'Maven' and copy it to the '$SEATNUNNEL_HOME/plugins/jdbc/lib/'
+> Please download the support list corresponding to 'Maven' and copy it to the '$SEATUNNEL_HOME/plugins/jdbc/lib/'
 > working directory<br/>
-> For example: cp kingbase8-8.6.0.jar $SEATNUNNEL_HOME/plugins/jdbc/lib/
+> For example: cp kingbase8-8.6.0.jar $SEATUNNEL_HOME/plugins/jdbc/lib/
 
 ## Data Type Mapping
 
-|              Kingbase Data type              |                                                                SeaTunnel Data type                                                                |
+|              Kingbase Data Type              |                                                                SeaTunnel Data Type                                                                |
 |----------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
 | BOOL                                         | BOOLEAN                                                                                                                                           |
 | INT2                                         | SHORT                                                                                                                                             |
@@ -73,7 +73,8 @@
 | max_commit_attempts                       | Int     | No       | 3       | The number of retries for transaction commit failures                                                                                                                                                                                        |
 | transaction_timeout_sec                   | Int     | No       | -1      | The timeout after the transaction is opened, the default is -1 (never timeout). Note that setting the timeout may affect<br/>exactly-once semantics                                                                                          |
 | auto_commit                               | Boolean | No       | true    | Automatic transaction commit is enabled by default                                                                                                                                                                                           |
-| common-options                            |         | no       | -       | Sink plugin common parameters, please refer to [Sink Common Options](common-options.md) for details                                                                                                                                          |
+| common-options                            |         | no       | -       | Sink plugin common parameters, please refer to [Sink Common Options](../sink-common-options.md) for details                                                                                                                                  |
+| enable_upsert                             | Boolean | No       | true    | Enable upsert by primary_keys exist, If the task has no key duplicate data, setting this parameter to `false` can speed up data import                                                                                                       |
 
 ### Tips
 
@@ -96,8 +97,7 @@
 ```
 # Defining the runtime environment
 env {
-  # You can set flink configuration here
-  execution.parallelism = 1
+  parallelism = 1
   job.mode = "BATCH"
 }
 
@@ -105,7 +105,7 @@ source {
   # This is a example source plugin **only for test and demonstrate the feature source plugin**
   FakeSource {
     parallelism = 1
-    result_table_name = "fake"
+    plugin_output = "fake"
     row.num = 16
     schema = {
       fields {
@@ -125,7 +125,7 @@ source {
     }
   }
   # If you would like to get more information about how to configure seatunnel and see full list of source plugins,
-  # please go to https://seatunnel.apache.org/docs/category/source-v2
+  # please go to https://seatunnel.apache.org/docs/connector-v2/source
 }
 
 transform {
@@ -142,7 +142,7 @@ sink {
         query = "insert into test_table(c_string,c_boolean,c_tinyint,c_smallint,c_int,c_bigint,c_float,c_double,c_decimal,c_date,c_time,c_timestamp) values(?,?,?,?,?,?,?,?,?,?,?,?)"
         }
   # If you would like to get more information about how to configure seatunnel and see full list of sink plugins,
-  # please go to https://seatunnel.apache.org/docs/category/sink-v2
+  # please go to https://seatunnel.apache.org/docs/connector-v2/sink
 }
 ```
 

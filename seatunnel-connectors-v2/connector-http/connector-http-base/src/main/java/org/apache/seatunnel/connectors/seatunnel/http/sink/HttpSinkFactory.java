@@ -18,8 +18,12 @@
 package org.apache.seatunnel.connectors.seatunnel.http.sink;
 
 import org.apache.seatunnel.api.configuration.util.OptionRule;
+import org.apache.seatunnel.api.sink.SinkCommonOptions;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
+import org.apache.seatunnel.api.table.connector.TableSink;
 import org.apache.seatunnel.api.table.factory.Factory;
 import org.apache.seatunnel.api.table.factory.TableSinkFactory;
+import org.apache.seatunnel.api.table.factory.TableSinkFactoryContext;
 import org.apache.seatunnel.connectors.seatunnel.http.config.HttpConfig;
 
 import com.google.auto.service.AutoService;
@@ -32,14 +36,20 @@ public class HttpSinkFactory implements TableSinkFactory {
     }
 
     @Override
+    public TableSink createSink(TableSinkFactoryContext context) {
+        CatalogTable catalogTable = context.getCatalogTable();
+        return () -> new HttpSink(context.getOptions().toConfig(), catalogTable);
+    }
+
+    @Override
     public OptionRule optionRule() {
         return OptionRule.builder()
                 .required(HttpConfig.URL)
                 .optional(HttpConfig.HEADERS)
-                .optional(HttpConfig.PARAMS)
                 .optional(HttpConfig.RETRY)
                 .optional(HttpConfig.RETRY_BACKOFF_MULTIPLIER_MS)
                 .optional(HttpConfig.RETRY_BACKOFF_MAX_MS)
+                .optional(SinkCommonOptions.MULTI_TABLE_SINK_REPLICA)
                 .build();
     }
 }

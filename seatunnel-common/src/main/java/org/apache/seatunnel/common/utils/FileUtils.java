@@ -17,7 +17,8 @@
 
 package org.apache.seatunnel.common.utils;
 
-import org.apache.seatunnel.common.exception.CommonErrorCode;
+import org.apache.seatunnel.common.exception.CommonError;
+import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.common.exception.SeaTunnelRuntimeException;
 
 import lombok.NonNull;
@@ -36,6 +37,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -51,7 +53,9 @@ public class FileUtils {
                                     return path.toUri().toURL();
                                 } catch (MalformedURLException e) {
                                     throw new SeaTunnelRuntimeException(
-                                            CommonErrorCode.REFLECT_CLASS_OPERATION_FAILED, e);
+                                            CommonErrorCodeDeprecated
+                                                    .REFLECT_CLASS_OPERATION_FAILED,
+                                            e);
                                 }
                             })
                     .collect(Collectors.toList());
@@ -63,8 +67,7 @@ public class FileUtils {
             byte[] bytes = Files.readAllBytes(path);
             return new String(bytes);
         } catch (IOException e) {
-            throw new SeaTunnelRuntimeException(
-                    CommonErrorCode.FILE_OPERATION_FAILED, ExceptionUtils.getMessage(e));
+            throw CommonError.fileOperationFailed("SeaTunnel", "read", path.toString(), e);
         }
     }
 
@@ -75,8 +78,7 @@ public class FileUtils {
             ps = new PrintStream(new FileOutputStream(file));
             ps.println(str);
         } catch (FileNotFoundException e) {
-            throw new SeaTunnelRuntimeException(
-                    CommonErrorCode.FILE_OPERATION_FAILED, ExceptionUtils.getMessage(e), e);
+            throw CommonError.fileNotExistFailed("SeaTunnel", "write", filePath);
         } finally {
             if (ps != null) {
                 ps.close();
@@ -97,7 +99,7 @@ public class FileUtils {
      *
      * @param filePath filePath
      */
-    public static void createNewFile(String filePath) {
+    public static void createNewFile(String filePath) throws IOException {
         File file = new File(filePath);
         if (file.exists()) {
             file.delete();
@@ -106,6 +108,7 @@ public class FileUtils {
         if (!file.getParentFile().exists()) {
             createParentFile(file);
         }
+        file.createNewFile();
     }
 
     /**
@@ -118,11 +121,13 @@ public class FileUtils {
         try (Stream<String> lines = Files.lines(Paths.get(filePath))) {
             return lines.count();
         } catch (IOException e) {
-            throw new SeaTunnelRuntimeException(
-                    CommonErrorCode.FILE_OPERATION_FAILED,
-                    String.format("get file[%s] line error", filePath),
-                    e);
+            throw CommonError.fileOperationFailed("SeaTunnel", "read", filePath, e);
         }
+    }
+
+    public static boolean isFileExist(String filePath) {
+        File file = new File(filePath);
+        return file.exists();
     }
 
     /**
@@ -192,8 +197,34 @@ public class FileUtils {
             file.delete();
 
         } catch (Exception e) {
-            String errorMsg = String.format("Delete file [%s] failed", file.getPath());
-            throw new SeaTunnelRuntimeException(CommonErrorCode.FILE_OPERATION_FAILED, errorMsg, e);
+            throw CommonError.fileOperationFailed("SeaTunnel", "delete", file.toString(), e);
+        }
+    }
+
+    public static List<File> listFile(String dirPath) {
+        try {
+            File file = new File(dirPath);
+            if (file.isDirectory()) {
+                File[] files = file.listFiles();
+                if (files == null) {
+                    return null;
+                }
+                return Arrays.stream(files)
+                        .map(
+                                currFile -> {
+                                    if (currFile.isDirectory()) {
+                                        return null;
+                                    } else {
+                                        return Arrays.asList(currFile);
+                                    }
+                                })
+                        .filter(Objects::nonNull)
+                        .flatMap(List::stream)
+                        .collect(Collectors.toList());
+            }
+            return Arrays.asList(file);
+        } catch (Exception e) {
+            throw CommonError.fileOperationFailed("SeaTunnel", "list", dirPath, e);
         }
     }
 }

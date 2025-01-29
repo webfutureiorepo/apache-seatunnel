@@ -19,15 +19,23 @@ package org.apache.seatunnel.connectors.seatunnel.file.config;
 
 import org.apache.seatunnel.api.configuration.Option;
 import org.apache.seatunnel.api.configuration.Options;
+import org.apache.seatunnel.api.kerberos.KerberosConfig;
+import org.apache.seatunnel.api.sink.DataSaveMode;
+import org.apache.seatunnel.api.sink.SchemaSaveMode;
 import org.apache.seatunnel.common.utils.DateTimeUtils;
 import org.apache.seatunnel.common.utils.DateUtils;
 import org.apache.seatunnel.common.utils.TimeUtils;
 import org.apache.seatunnel.format.text.constant.TextFormatConstant;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
-public class BaseSinkConfig {
+import static org.apache.seatunnel.api.sink.DataSaveMode.APPEND_DATA;
+import static org.apache.seatunnel.api.sink.DataSaveMode.DROP_DATA;
+import static org.apache.seatunnel.api.sink.DataSaveMode.ERROR_WHEN_DATA_EXISTS;
+
+public class BaseSinkConfig extends KerberosConfig {
     public static final String SEATUNNEL = "seatunnel";
     public static final String NON_PARTITION = "NON_PARTITION";
     public static final String TRANSACTION_ID_SPLIT = "_";
@@ -45,6 +53,13 @@ public class BaseSinkConfig {
                     .enumType(CompressFormat.class)
                     .defaultValue(CompressFormat.NONE)
                     .withDescription("Compression codec");
+
+    // TODO：Compression is supported during write
+    public static final Option<ArchiveCompressFormat> ARCHIVE_COMPRESS_CODEC =
+            Options.key("archive_compress_codec")
+                    .enumType(ArchiveCompressFormat.class)
+                    .defaultValue(ArchiveCompressFormat.NONE)
+                    .withDescription("Archive compression codec");
 
     public static final Option<CompressFormat> TXT_COMPRESS =
             Options.key("compress_codec")
@@ -172,6 +187,20 @@ public class BaseSinkConfig {
                                     + "like `test_${uuid}_${now}`,`${now}` represents the current time, "
                                     + "and its format can be defined by specifying the option `filename_time_format`.");
 
+    public static final Option<Boolean> SINGLE_FILE_MODE =
+            Options.key("single_file_mode")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to write all data to a single file in each parallelism task");
+
+    public static final Option<Boolean> CREATE_EMPTY_FILE_WHEN_NO_DATA =
+            Options.key("create_empty_file_when_no_data")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to generate an empty file when there is no data to write");
+
     public static final Option<String> FILENAME_TIME_FORMAT =
             Options.key("filename_time_format")
                     .stringType()
@@ -184,6 +213,12 @@ public class BaseSinkConfig {
                     .enumType(FileFormat.class)
                     .defaultValue(FileFormat.CSV)
                     .withDescription("File format type, e.g. csv, orc, parquet, text");
+
+    public static final Option<String> ENCODING =
+            Options.key("encoding")
+                    .stringType()
+                    .defaultValue("UTF-8")
+                    .withDescription("The encoding of output file, e.g. UTF-8, ISO-8859-1....");
 
     public static final Option<List<String>> SINK_COLUMNS =
             Options.key("sink_columns")
@@ -209,17 +244,11 @@ public class BaseSinkConfig {
                     .noDefaultValue()
                     .withDescription("The path of hdfs-site.xml");
 
-    public static final Option<String> KERBEROS_PRINCIPAL =
-            Options.key("kerberos_principal")
+    public static final Option<String> REMOTE_USER =
+            Options.key("remote_user")
                     .stringType()
                     .noDefaultValue()
-                    .withDescription("Kerberos principal");
-
-    public static final Option<String> KERBEROS_KEYTAB_PATH =
-            Options.key("kerberos_keytab_path")
-                    .stringType()
-                    .noDefaultValue()
-                    .withDescription("Kerberos keytab file path");
+                    .withDescription("The remote user name of hdfs");
 
     public static final Option<Integer> MAX_ROWS_IN_MEMORY =
             Options.key("max_rows_in_memory")
@@ -233,9 +262,60 @@ public class BaseSinkConfig {
                     .noDefaultValue()
                     .withDescription("To be written sheet name,only valid for excel files");
 
+    public static final Option<String> XML_ROOT_TAG =
+            Options.key("xml_root_tag")
+                    .stringType()
+                    .defaultValue("RECORDS")
+                    .withDescription(
+                            "Specifies the tag name of the root element within the XML file, only valid for xml files, default value is 'RECORDS'");
+
+    public static final Option<String> XML_ROW_TAG =
+            Options.key("xml_row_tag")
+                    .stringType()
+                    .defaultValue("RECORD")
+                    .withDescription(
+                            "Specifies the tag name of the data rows within the XML file, only valid for xml files, default value is 'RECORD'");
+
+    public static final Option<Boolean> XML_USE_ATTR_FORMAT =
+            Options.key("xml_use_attr_format")
+                    .booleanType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Specifies whether to process data using the tag attribute format, only valid for XML files.");
+
     public static final Option<Boolean> ENABLE_HEADER_WRITE =
             Options.key("enable_header_write")
                     .booleanType()
                     .defaultValue(false)
                     .withDescription("false:dont write header,true:write header");
+
+    public static final Option<Boolean> PARQUET_AVRO_WRITE_TIMESTAMP_AS_INT96 =
+            Options.key("parquet_avro_write_timestamp_as_int96")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Support writing Parquet INT96 from a timestamp, only valid for parquet files.");
+
+    public static final Option<List<String>> PARQUET_AVRO_WRITE_FIXED_AS_INT96 =
+            Options.key("parquet_avro_write_fixed_as_int96")
+                    .listType(String.class)
+                    .defaultValue(Collections.emptyList())
+                    .withDescription(
+                            "Support writing Parquet INT96 from a 12-byte field, only valid for parquet files.");
+
+    public static final Option<SchemaSaveMode> SCHEMA_SAVE_MODE =
+            Options.key("schema_save_mode")
+                    .enumType(SchemaSaveMode.class)
+                    .defaultValue(SchemaSaveMode.CREATE_SCHEMA_WHEN_NOT_EXIST)
+                    .withDescription(
+                            "Before the synchronization task begins, process the existing path");
+
+    public static final Option<DataSaveMode> DATA_SAVE_MODE =
+            Options.key("data_save_mode")
+                    .singleChoice(
+                            DataSaveMode.class,
+                            Arrays.asList(DROP_DATA, APPEND_DATA, ERROR_WHEN_DATA_EXISTS))
+                    .defaultValue(APPEND_DATA)
+                    .withDescription(
+                            "Before the synchronization task begins, different processing of data files that already exist in the directory");
 }

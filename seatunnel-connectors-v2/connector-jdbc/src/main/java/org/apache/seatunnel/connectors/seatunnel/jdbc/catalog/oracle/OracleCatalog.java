@@ -19,64 +19,29 @@ package org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.oracle;
 
 import org.apache.seatunnel.api.table.catalog.CatalogTable;
 import org.apache.seatunnel.api.table.catalog.Column;
-import org.apache.seatunnel.api.table.catalog.PhysicalColumn;
+import org.apache.seatunnel.api.table.catalog.ConstraintKey;
 import org.apache.seatunnel.api.table.catalog.TablePath;
-import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
+import org.apache.seatunnel.api.table.catalog.exception.CatalogException;
+import org.apache.seatunnel.api.table.converter.BasicTypeDefine;
 import org.apache.seatunnel.common.utils.JdbcUrlUtil;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.AbstractJdbcCatalog;
+import org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.utils.CatalogUtils;
+import org.apache.seatunnel.connectors.seatunnel.jdbc.config.JdbcOptions;
+import org.apache.seatunnel.connectors.seatunnel.jdbc.internal.dialect.oracle.OracleTypeConverter;
+import org.apache.seatunnel.connectors.seatunnel.jdbc.internal.dialect.oracle.OracleTypeMapper;
 
 import lombok.extern.slf4j.Slf4j;
 
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-
-import static org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.oracle.OracleDataTypeConvertor.ORACLE_BFILE;
-import static org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.oracle.OracleDataTypeConvertor.ORACLE_BLOB;
-import static org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.oracle.OracleDataTypeConvertor.ORACLE_CHAR;
-import static org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.oracle.OracleDataTypeConvertor.ORACLE_CLOB;
-import static org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.oracle.OracleDataTypeConvertor.ORACLE_LONG;
-import static org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.oracle.OracleDataTypeConvertor.ORACLE_LONG_RAW;
-import static org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.oracle.OracleDataTypeConvertor.ORACLE_NCHAR;
-import static org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.oracle.OracleDataTypeConvertor.ORACLE_NCLOB;
-import static org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.oracle.OracleDataTypeConvertor.ORACLE_NVARCHAR2;
-import static org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.oracle.OracleDataTypeConvertor.ORACLE_RAW;
-import static org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.oracle.OracleDataTypeConvertor.ORACLE_ROWID;
-import static org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.oracle.OracleDataTypeConvertor.ORACLE_VARCHAR2;
 
 @Slf4j
 public class OracleCatalog extends AbstractJdbcCatalog {
-
-    private static final OracleDataTypeConvertor DATA_TYPE_CONVERTOR =
-            new OracleDataTypeConvertor();
-
-    protected static List<String> EXCLUDED_SCHEMAS =
-            Collections.unmodifiableList(
-                    Arrays.asList(
-                            "APPQOSSYS",
-                            "AUDSYS",
-                            "CTXSYS",
-                            "DVSYS",
-                            "DBSFWUSER",
-                            "DBSNMP",
-                            "GSMADMIN_INTERNAL",
-                            "LBACSYS",
-                            "MDSYS",
-                            "OJVMSYS",
-                            "OLAPSYS",
-                            "ORDDATA",
-                            "ORDSYS",
-                            "OUTLN",
-                            "SYS",
-                            "SYSTEM",
-                            "WMSYS",
-                            "XDB",
-                            "EXFSYS",
-                            "SYSMAN"));
 
     private static final String SELECT_COLUMNS_SQL_TEMPLATE =
             "SELECT\n"
@@ -87,7 +52,8 @@ public class OracleCatalog extends AbstractJdbcCatalog {
                     + "    END as TYPE_NAME,\n"
                     + "    cols.data_type || \n"
                     + "        CASE \n"
-                    + "            WHEN cols.data_type IN ('VARCHAR2', 'CHAR') THEN '(' || cols.data_length || ')'\n"
+                    + "            WHEN cols.data_type IN ('VARCHAR', 'VARCHAR2', 'CHAR') THEN '(' || cols.data_length || ')'\n"
+                    + "            WHEN cols.data_type IN ('NVARCHAR2', 'NCHAR') THEN '(' || cols.char_length || ')'\n"
                     + "            WHEN cols.data_type IN ('NUMBER') AND cols.data_precision IS NOT NULL AND cols.data_scale IS NOT NULL THEN '(' || cols.data_precision || ', ' || cols.data_scale || ')'\n"
                     + "            WHEN cols.data_type IN ('NUMBER') AND cols.data_precision IS NOT NULL AND cols.data_scale IS NULL THEN '(' || cols.data_precision || ')'\n"
                     + "            WHEN cols.data_type IN ('RAW') THEN '(' || cols.data_length || ')'\n"
@@ -108,23 +74,63 @@ public class OracleCatalog extends AbstractJdbcCatalog {
                     + "ORDER BY \n"
                     + "    cols.column_id \n";
 
+    private boolean decimalTypeNarrowing;
+
     public OracleCatalog(
             String catalogName,
             String username,
             String pwd,
             JdbcUrlUtil.UrlInfo urlInfo,
             String defaultSchema) {
+        this(
+                catalogName,
+                username,
+                pwd,
+                urlInfo,
+                defaultSchema,
+                JdbcOptions.DECIMAL_TYPE_NARROWING.defaultValue());
+    }
+
+    public OracleCatalog(
+            String catalogName,
+            String username,
+            String pwd,
+            JdbcUrlUtil.UrlInfo urlInfo,
+            String defaultSchema,
+            boolean decimalTypeNarrowing) {
         super(catalogName, username, pwd, urlInfo, defaultSchema);
+        this.decimalTypeNarrowing = decimalTypeNarrowing;
     }
 
     @Override
-    protected String getListDatabaseSql() {
-        return "SELECT name FROM v$database";
+    protected String getTableWithConditionSql(TablePath tablePath) {
+        return getListTableSql(tablePath.getDatabaseName())
+                + "  and  OWNER = '"
+                + tablePath.getSchemaName()
+                + "' and table_name = '"
+                + tablePath.getTableName()
+                + "'";
     }
 
     @Override
-    protected String getCreateTableSql(TablePath tablePath, CatalogTable table) {
-        return new OracleCreateTableSqlBuilder(table).build(tablePath);
+    public boolean databaseExists(String databaseName) throws CatalogException {
+        return true;
+    }
+
+    @Override
+    public List<String> listDatabases() throws CatalogException {
+        return new ArrayList<>(Collections.singletonList("default"));
+    }
+
+    @Override
+    protected String getCreateTableSql(
+            TablePath tablePath, CatalogTable table, boolean createIndex) {
+        return new OracleCreateTableSqlBuilder(table, createIndex).build(tablePath).get(0);
+    }
+
+    protected List<String> getCreateTableSqls(
+            TablePath tablePath, CatalogTable table, boolean createIndex) {
+        return new OracleCreateTableSqlBuilder(table, createIndex).build(tablePath);
     }
 
     @Override
@@ -143,9 +149,6 @@ public class OracleCatalog extends AbstractJdbcCatalog {
 
     @Override
     protected String getTableName(ResultSet rs) throws SQLException {
-        if (EXCLUDED_SCHEMAS.contains(rs.getString(1))) {
-            return null;
-        }
         return rs.getString(1) + "." + rs.getString(2);
     }
 
@@ -158,60 +161,30 @@ public class OracleCatalog extends AbstractJdbcCatalog {
     @Override
     protected Column buildColumn(ResultSet resultSet) throws SQLException {
         String columnName = resultSet.getString("COLUMN_NAME");
+        // e.g NUMBER
         String typeName = resultSet.getString("TYPE_NAME");
+        // e.g NUMBER(10, 2)
         String fullTypeName = resultSet.getString("FULL_TYPE_NAME");
         long columnLength = resultSet.getLong("COLUMN_LENGTH");
-        long columnPrecision = resultSet.getLong("COLUMN_PRECISION");
-        long columnScale = resultSet.getLong("COLUMN_SCALE");
+        Long columnPrecision = resultSet.getObject("COLUMN_PRECISION", Long.class);
+        Integer columnScale = resultSet.getObject("COLUMN_SCALE", Integer.class);
         String columnComment = resultSet.getString("COLUMN_COMMENT");
         Object defaultValue = resultSet.getObject("DEFAULT_VALUE");
         boolean isNullable = resultSet.getString("IS_NULLABLE").equals("YES");
 
-        SeaTunnelDataType<?> type = fromJdbcType(typeName, columnPrecision, columnScale);
-        long bitLen = 0;
-        switch (typeName) {
-            case ORACLE_LONG:
-            case ORACLE_ROWID:
-            case ORACLE_NCLOB:
-            case ORACLE_CLOB:
-                columnLength = -1;
-                break;
-            case ORACLE_RAW:
-                bitLen = 2000 * 8;
-                break;
-            case ORACLE_BLOB:
-            case ORACLE_LONG_RAW:
-            case ORACLE_BFILE:
-                bitLen = -1;
-                break;
-            case ORACLE_CHAR:
-            case ORACLE_NCHAR:
-            case ORACLE_NVARCHAR2:
-            case ORACLE_VARCHAR2:
-            default:
-                break;
-        }
-
-        return PhysicalColumn.of(
-                columnName,
-                type,
-                0,
-                isNullable,
-                defaultValue,
-                columnComment,
-                fullTypeName,
-                false,
-                false,
-                bitLen,
-                null,
-                columnLength);
-    }
-
-    private SeaTunnelDataType<?> fromJdbcType(String typeName, long precision, long scale) {
-        Map<String, Object> dataTypeProperties = new HashMap<>();
-        dataTypeProperties.put(OracleDataTypeConvertor.PRECISION, precision);
-        dataTypeProperties.put(OracleDataTypeConvertor.SCALE, scale);
-        return DATA_TYPE_CONVERTOR.toSeaTunnelType(typeName, dataTypeProperties);
+        BasicTypeDefine typeDefine =
+                BasicTypeDefine.builder()
+                        .name(columnName)
+                        .columnType(fullTypeName)
+                        .dataType(typeName)
+                        .length(columnLength)
+                        .precision(columnPrecision)
+                        .scale(columnScale)
+                        .nullable(isNullable)
+                        .defaultValue(defaultValue)
+                        .comment(columnComment)
+                        .build();
+        return new OracleTypeConverter(decimalTypeNarrowing).convert(typeDefine);
     }
 
     @Override
@@ -222,5 +195,41 @@ public class OracleCatalog extends AbstractJdbcCatalog {
     @Override
     protected String getOptionTableName(TablePath tablePath) {
         return tablePath.getSchemaAndTableName();
+    }
+
+    @Override
+    public CatalogTable getTable(String sqlQuery) throws SQLException {
+        Connection defaultConnection = getConnection(defaultUrl);
+        return CatalogUtils.getCatalogTable(
+                defaultConnection, sqlQuery, new OracleTypeMapper(decimalTypeNarrowing));
+    }
+
+    @Override
+    protected String getTruncateTableSql(TablePath tablePath) {
+        return String.format(
+                "TRUNCATE TABLE \"%s\".\"%s\"",
+                tablePath.getSchemaName(), tablePath.getTableName());
+    }
+
+    @Override
+    protected String getExistDataSql(TablePath tablePath) {
+        return String.format(
+                "select * from \"%s\".\"%s\" WHERE rownum = 1",
+                tablePath.getSchemaName(), tablePath.getTableName());
+    }
+
+    @Override
+    protected List<ConstraintKey> getConstraintKeys(DatabaseMetaData metaData, TablePath tablePath)
+            throws SQLException {
+        try {
+            return getConstraintKeys(
+                    metaData,
+                    tablePath.getDatabaseName(),
+                    tablePath.getSchemaName(),
+                    tablePath.getTableName());
+        } catch (SQLException e) {
+            log.info("Obtain constraint failure", e);
+            return new ArrayList<>();
+        }
     }
 }

@@ -17,20 +17,22 @@
 
 package org.apache.seatunnel.connectors.seatunnel.file.local.sink;
 
-import org.apache.seatunnel.shade.com.typesafe.config.Config;
-
-import org.apache.seatunnel.api.common.PrepareFailException;
-import org.apache.seatunnel.api.sink.SeaTunnelSink;
+import org.apache.seatunnel.api.configuration.ReadonlyConfig;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
 import org.apache.seatunnel.connectors.seatunnel.file.config.FileSystemType;
-import org.apache.seatunnel.connectors.seatunnel.file.local.config.LocalConf;
-import org.apache.seatunnel.connectors.seatunnel.file.sink.BaseFileSink;
+import org.apache.seatunnel.connectors.seatunnel.file.local.config.LocalFileHadoopConf;
+import org.apache.seatunnel.connectors.seatunnel.file.sink.BaseMultipleTableFileSink;
 
-import org.apache.hadoop.fs.CommonConfigurationKeys;
+import java.util.Optional;
 
-import com.google.auto.service.AutoService;
+public class LocalFileSink extends BaseMultipleTableFileSink {
 
-@AutoService(SeaTunnelSink.class)
-public class LocalFileSink extends BaseFileSink {
+    private final CatalogTable catalogTable;
+
+    public LocalFileSink(ReadonlyConfig readonlyConfig, CatalogTable catalogTable) {
+        super(new LocalFileHadoopConf(), readonlyConfig, catalogTable);
+        this.catalogTable = catalogTable;
+    }
 
     @Override
     public String getPluginName() {
@@ -38,8 +40,7 @@ public class LocalFileSink extends BaseFileSink {
     }
 
     @Override
-    public void prepare(Config pluginConfig) throws PrepareFailException {
-        super.prepare(pluginConfig);
-        hadoopConf = new LocalConf(CommonConfigurationKeys.FS_DEFAULT_NAME_DEFAULT);
+    public Optional<CatalogTable> getWriteCatalogTable() {
+        return Optional.ofNullable(catalogTable);
     }
 }

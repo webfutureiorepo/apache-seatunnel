@@ -19,6 +19,7 @@ package org.apache.seatunnel.translation.spark.source.scan;
 
 import org.apache.seatunnel.api.source.SeaTunnelSource;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
+import org.apache.seatunnel.translation.spark.execution.MultiTableManager;
 
 import org.apache.spark.sql.connector.read.Scan;
 import org.apache.spark.sql.connector.read.ScanBuilder;
@@ -29,21 +30,29 @@ public class SeaTunnelScanBuilder implements ScanBuilder {
     private final SeaTunnelSource<SeaTunnelRow, ?, ?> source;
 
     private final int parallelism;
+    private final String jobId;
 
     private final CaseInsensitiveStringMap caseInsensitiveStringMap;
+
+    private final MultiTableManager multiTableManager;
 
     public SeaTunnelScanBuilder(
             SeaTunnelSource<SeaTunnelRow, ?, ?> source,
             int parallelism,
-            CaseInsensitiveStringMap caseInsensitiveStringMap) {
+            String jobId,
+            CaseInsensitiveStringMap caseInsensitiveStringMap,
+            MultiTableManager multiTableManager) {
         this.source = source;
         this.parallelism = parallelism;
+        this.jobId = jobId;
         this.caseInsensitiveStringMap = caseInsensitiveStringMap;
+        this.multiTableManager = multiTableManager;
     }
 
     /** Returns the {@link SeaTunnelScan} */
     @Override
     public Scan build() {
-        return new SeaTunnelScan(source, parallelism, caseInsensitiveStringMap);
+        return new SeaTunnelScan(
+                source, parallelism, jobId, caseInsensitiveStringMap, multiTableManager);
     }
 }

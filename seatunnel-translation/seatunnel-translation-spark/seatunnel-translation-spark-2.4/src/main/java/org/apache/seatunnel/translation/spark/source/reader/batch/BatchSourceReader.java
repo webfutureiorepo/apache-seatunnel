@@ -20,8 +20,8 @@ package org.apache.seatunnel.translation.spark.source.reader.batch;
 import org.apache.seatunnel.api.source.SeaTunnelSource;
 import org.apache.seatunnel.api.source.SupportCoordinate;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
+import org.apache.seatunnel.translation.spark.execution.MultiTableManager;
 import org.apache.seatunnel.translation.spark.source.partition.batch.BatchPartition;
-import org.apache.seatunnel.translation.spark.utils.TypeConverterUtils;
 
 import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.sources.v2.reader.DataSourceReader;
@@ -30,20 +30,32 @@ import org.apache.spark.sql.types.StructType;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 public class BatchSourceReader implements DataSourceReader {
 
     protected final SeaTunnelSource<SeaTunnelRow, ?, ?> source;
+    protected final String jobId;
     protected final Integer parallelism;
+    private Map<String, String> envOptions;
+    private final MultiTableManager multiTableManager;
 
-    public BatchSourceReader(SeaTunnelSource<SeaTunnelRow, ?, ?> source, Integer parallelism) {
+    public BatchSourceReader(
+            SeaTunnelSource<SeaTunnelRow, ?, ?> source,
+            String jobId,
+            Integer parallelism,
+            Map<String, String> envOptions,
+            MultiTableManager multiTableManager) {
         this.source = source;
+        this.jobId = jobId;
         this.parallelism = parallelism;
+        this.envOptions = envOptions;
+        this.multiTableManager = multiTableManager;
     }
 
     @Override
     public StructType readSchema() {
-        return (StructType) TypeConverterUtils.convert(source.getProducedType());
+        return multiTableManager.getTableSchema();
     }
 
     @Override
@@ -51,11 +63,20 @@ public class BatchSourceReader implements DataSourceReader {
         List<InputPartition<InternalRow>> virtualPartitions;
         if (source instanceof SupportCoordinate) {
             virtualPartitions = new ArrayList<>(1);
-            virtualPartitions.add(new BatchPartition(source, parallelism, 0));
+            virtualPartitions.add(
+                    new BatchPartition(
+                            source, parallelism, jobId, 0, envOptions, multiTableManager));
         } else {
             virtualPartitions = new ArrayList<>(parallelism);
             for (int subtaskId = 0; subtaskId < parallelism; subtaskId++) {
-                virtualPartitions.add(new BatchPartition(source, parallelism, subtaskId));
+                virtualPartitions.add(
+                        new BatchPartition(
+                                source,
+                                parallelism,
+                                jobId,
+                                subtaskId,
+                                envOptions,
+                                multiTableManager));
             }
         }
         return virtualPartitions;

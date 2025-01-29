@@ -29,17 +29,21 @@ import static org.apache.seatunnel.format.compatible.debezium.json.CompatibleDeb
 
 @RequiredArgsConstructor
 public class CompatibleDebeziumJsonSerializationSchema implements SerializationSchema {
-    public static final String IDENTIFIER = CompatibleDebeziumJsonDeserializationSchema.IDENTIFIER;
 
+    private final boolean isKey;
     private final int index;
 
     public CompatibleDebeziumJsonSerializationSchema(SeaTunnelRowType rowType, boolean isKey) {
+        this.isKey = isKey;
         this.index = rowType.indexOf(isKey ? FIELD_KEY : FIELD_VALUE);
     }
 
     @Override
     public byte[] serialize(SeaTunnelRow row) {
         String field = (String) row.getField(index);
+        if (isKey && field == null) {
+            return null;
+        }
         return field.getBytes();
     }
 }

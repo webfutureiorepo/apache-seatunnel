@@ -17,15 +17,31 @@
 
 package org.apache.seatunnel.connectors.seatunnel.elasticsearch.config;
 
+import org.apache.seatunnel.shade.com.fasterxml.jackson.core.type.TypeReference;
+
 import org.apache.seatunnel.api.configuration.Option;
 import org.apache.seatunnel.api.configuration.Options;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
 
+import lombok.Getter;
+import lombok.Setter;
+
+import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class SourceConfig {
+@Getter
+@Setter
+public class SourceConfig implements Serializable {
+
+    public static final Option<List<Map<String, Object>>> INDEX_LIST =
+            Options.key("index_list")
+                    .type(new TypeReference<List<Map<String, Object>>>() {})
+                    .noDefaultValue()
+                    .withDescription("index_list for multiTable sync");
 
     public static final Option<String> INDEX =
             Options.key("index")
@@ -39,6 +55,13 @@ public class SourceConfig {
                     .noDefaultValue()
                     .withDescription(
                             "The fields of index. You can get the document id by specifying the field _id.If sink _id to other index,you need specify an alias for _id due to the Elasticsearch limit");
+
+    public static final Option<Map<String, String>> ARRAY_COLUMN =
+            Options.key("array_column")
+                    .mapType()
+                    .defaultValue(new HashMap<>())
+                    .withDescription(
+                            "Because there is no array type in es,so need specify array Type.");
 
     public static final Option<String> SCROLL_TIME =
             Options.key("scroll_time")
@@ -54,11 +77,30 @@ public class SourceConfig {
                     .withDescription(
                             "Maximum number of hits to be returned with each Elasticsearch scroll request");
 
-    public static final Option<Map> QUERY =
+    public static final Option<Map<String, Object>> QUERY =
             Options.key("query")
-                    .objectType(Map.class)
+                    .type(new TypeReference<Map<String, Object>>() {})
                     .defaultValue(
                             Collections.singletonMap("match_all", new HashMap<String, String>()))
                     .withDescription(
                             "Elasticsearch query language. You can control the range of data read");
+
+    private String index;
+    private List<String> source;
+    private Map<String, Object> query;
+    private String scrollTime;
+    private int scrollSize;
+
+    private CatalogTable catalogTable;
+
+    public SourceConfig clone() {
+        SourceConfig sourceConfig = new SourceConfig();
+        sourceConfig.setIndex(index);
+        sourceConfig.setSource(new ArrayList<>(source));
+        sourceConfig.setQuery(new HashMap<>(query));
+        sourceConfig.setScrollTime(scrollTime);
+        sourceConfig.setScrollSize(scrollSize);
+        sourceConfig.setCatalogTable(catalogTable);
+        return sourceConfig;
+    }
 }

@@ -18,8 +18,10 @@
 package org.apache.seatunnel.connectors.seatunnel.starrocks.client;
 
 import org.apache.seatunnel.common.utils.JsonUtils;
+import org.apache.seatunnel.connectors.seatunnel.starrocks.config.SinkConfig;
 
 import org.apache.http.HttpEntity;
+import org.apache.http.HttpRequestInterceptor;
 import org.apache.http.HttpStatus;
 import org.apache.http.client.config.RequestConfig;
 import org.apache.http.client.methods.CloseableHttpResponse;
@@ -31,6 +33,7 @@ import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.DefaultRedirectStrategy;
 import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.impl.client.HttpClients;
+import org.apache.http.protocol.HTTP;
 import org.apache.http.util.EntityUtils;
 
 import lombok.extern.slf4j.Slf4j;
@@ -44,6 +47,14 @@ import java.util.Map;
 @Slf4j
 public class HttpHelper {
     private static final int DEFAULT_CONNECT_TIMEOUT = 1000000;
+
+    private SinkConfig sinkConfig;
+
+    public HttpHelper() {}
+
+    public HttpHelper(SinkConfig sinkConfig) {
+        this.sinkConfig = sinkConfig;
+    }
 
     public HttpEntity getHttpEntity(CloseableHttpResponse resp) {
         int code = resp.getStatusLine().getStatusCode();
@@ -118,6 +129,14 @@ public class HttpHelper {
             throws IOException {
         final HttpClientBuilder httpClientBuilder =
                 HttpClients.custom()
+                        .addInterceptorFirst(
+                                (HttpRequestInterceptor)
+                                        (request, context) -> {
+                                            // fighting org.apache.http.protocol.RequestContent's
+                                            // ProtocolException("Content-Length header already
+                                            // present");
+                                            request.removeHeaders(HTTP.CONTENT_LEN);
+                                        })
                         .setRedirectStrategy(
                                 new DefaultRedirectStrategy() {
                                     @Override
@@ -133,7 +152,11 @@ public class HttpHelper {
                 }
             }
             httpPut.setEntity(new ByteArrayEntity(data));
-            httpPut.setConfig(RequestConfig.custom().setRedirectsEnabled(true).build());
+            httpPut.setConfig(
+                    RequestConfig.custom()
+                            .setSocketTimeout(sinkConfig.getHttpSocketTimeout())
+                            .setRedirectsEnabled(true)
+                            .build());
             try (CloseableHttpResponse resp = httpclient.execute(httpPut)) {
                 int code = resp.getStatusLine().getStatusCode();
                 if (HttpStatus.SC_OK != code) {

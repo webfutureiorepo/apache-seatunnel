@@ -20,6 +20,7 @@ package org.apache.seatunnel.engine.server.serializable;
 import org.apache.seatunnel.engine.common.serializeable.SeaTunnelFactoryIdConstant;
 import org.apache.seatunnel.engine.server.operation.CancelJobOperation;
 import org.apache.seatunnel.engine.server.operation.GetClusterHealthMetricsOperation;
+import org.apache.seatunnel.engine.server.operation.GetJobCheckpointOperation;
 import org.apache.seatunnel.engine.server.operation.GetJobDetailStatusOperation;
 import org.apache.seatunnel.engine.server.operation.GetJobInfoOperation;
 import org.apache.seatunnel.engine.server.operation.GetJobMetricsOperation;
@@ -28,6 +29,7 @@ import org.apache.seatunnel.engine.server.operation.GetRunningJobMetricsOperatio
 import org.apache.seatunnel.engine.server.operation.PrintMessageOperation;
 import org.apache.seatunnel.engine.server.operation.SavePointJobOperation;
 import org.apache.seatunnel.engine.server.operation.SubmitJobOperation;
+import org.apache.seatunnel.engine.server.operation.UploadConnectorJarOperation;
 import org.apache.seatunnel.engine.server.operation.WaitForJobCompleteOperation;
 
 import com.hazelcast.internal.serialization.DataSerializerHook;
@@ -62,6 +64,9 @@ public final class ClientToServerOperationDataSerializerHook implements DataSeri
     public static final int GET_CLUSTER_HEALTH_METRICS = 9;
 
     public static final int GET_RUNNING_JOB_METRICS_OPERATOR = 10;
+
+    public static final int UPLOAD_CONNECTOR_JAR_OPERATION = 11;
+    public static final int GET_JOB_CHECKPOINT_OPERATION = 12;
 
     public static final int FACTORY_ID =
             FactoryIdHelper.getFactoryId(
@@ -104,6 +109,10 @@ public final class ClientToServerOperationDataSerializerHook implements DataSeri
                     return new GetClusterHealthMetricsOperation();
                 case GET_RUNNING_JOB_METRICS_OPERATOR:
                     return new GetRunningJobMetricsOperation();
+                case UPLOAD_CONNECTOR_JAR_OPERATION:
+                    return new UploadConnectorJarOperation();
+                case GET_JOB_CHECKPOINT_OPERATION:
+                    return new GetJobCheckpointOperation();
                 default:
                     throw new IllegalArgumentException("Unknown type id " + typeId);
             }

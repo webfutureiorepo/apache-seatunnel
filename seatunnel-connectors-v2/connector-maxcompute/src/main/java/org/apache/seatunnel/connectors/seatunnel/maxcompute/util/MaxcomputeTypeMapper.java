@@ -19,16 +19,14 @@ package org.apache.seatunnel.connectors.seatunnel.maxcompute.util;
 
 import org.apache.seatunnel.shade.com.typesafe.config.Config;
 
+import org.apache.seatunnel.api.configuration.ReadonlyConfig;
 import org.apache.seatunnel.api.table.type.ArrayType;
-import org.apache.seatunnel.api.table.type.BasicType;
-import org.apache.seatunnel.api.table.type.DecimalType;
-import org.apache.seatunnel.api.table.type.LocalTimeType;
 import org.apache.seatunnel.api.table.type.MapType;
-import org.apache.seatunnel.api.table.type.PrimitiveByteArrayType;
 import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
-import org.apache.seatunnel.common.exception.CommonErrorCode;
+import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
+import org.apache.seatunnel.connectors.seatunnel.maxcompute.catalog.MaxComputeDataTypeConvertor;
 import org.apache.seatunnel.connectors.seatunnel.maxcompute.exception.MaxcomputeConnectorException;
 
 import com.aliyun.odps.Column;
@@ -41,11 +39,7 @@ import com.aliyun.odps.data.Record;
 import com.aliyun.odps.data.SimpleStruct;
 import com.aliyun.odps.data.Varchar;
 import com.aliyun.odps.type.ArrayTypeInfo;
-import com.aliyun.odps.type.DecimalTypeInfo;
 import com.aliyun.odps.type.MapTypeInfo;
-import com.aliyun.odps.type.SimpleArrayTypeInfo;
-import com.aliyun.odps.type.SimpleMapTypeInfo;
-import com.aliyun.odps.type.SimpleStructTypeInfo;
 import com.aliyun.odps.type.StructTypeInfo;
 import com.aliyun.odps.type.TypeInfo;
 import lombok.extern.slf4j.Slf4j;
@@ -67,126 +61,56 @@ public class MaxcomputeTypeMapper implements Serializable {
 
     public static SeaTunnelRow getSeaTunnelRowData(Record rs, SeaTunnelRowType typeInfo) {
         List<Object> fields = new ArrayList<>();
-        SeaTunnelDataType<?>[] seaTunnelDataTypes = typeInfo.getFieldTypes();
-        for (int i = 0; i < rs.getColumns().length; i++) {
-            fields.add(resolveObject2SeaTunnel(rs.get(i), seaTunnelDataTypes[i]));
+        for (int i = 0; i < typeInfo.getTotalFields(); i++) {
+            String typeName = typeInfo.getFieldName(i);
+            fields.add(resolveObject2SeaTunnel(rs.get(typeName), typeInfo.getFieldType(i)));
         }
         return new SeaTunnelRow(fields.toArray());
     }
 
-    public static Record getMaxcomputeRowData(SeaTunnelRow seaTunnelRow, TableSchema tableSchema) {
+    public static Record getMaxcomputeRowData(
+            SeaTunnelRow seaTunnelRow, TableSchema tableSchema, SeaTunnelRowType rowType) {
         ArrayRecord arrayRecord = new ArrayRecord(tableSchema);
-        List<Column> columns = tableSchema.getColumns();
         for (int i = 0; i < seaTunnelRow.getFields().length; i++) {
+            String fieldName = rowType.getFieldName(i);
+            if (!tableSchema.containsColumn(fieldName)) {
+                throw new MaxcomputeConnectorException(
+                        CommonErrorCodeDeprecated.ILLEGAL_ARGUMENT,
+                        String.format(
+                                "field not found in written table: %s,rowType: %s",
+                                fieldName, seaTunnelRow.getField(i)));
+            }
+            Column column = tableSchema.getColumn(fieldName);
+
             arrayRecord.set(
-                    i,
-                    resolveObject2Maxcompute(
-                            seaTunnelRow.getField(i), columns.get(i).getTypeInfo()));
+                    tableSchema.getColumnIndex(fieldName),
+                    resolveObject2Maxcompute(seaTunnelRow.getField(i), column.getTypeInfo()));
         }
         return arrayRecord;
     }
 
     public static SeaTunnelRowType getSeaTunnelRowType(Config pluginConfig) {
-        Table table = MaxcomputeUtil.getTable(pluginConfig);
+        Table table = MaxcomputeUtil.getTable(ReadonlyConfig.fromConfig(pluginConfig));
         TableSchema tableSchema = table.getSchema();
         ArrayList<SeaTunnelDataType<?>> seaTunnelDataTypes = new ArrayList<>();
         ArrayList<String> fieldNames = new ArrayList<>();
         try {
+            MaxComputeDataTypeConvertor typeConvertor = new MaxComputeDataTypeConvertor();
             for (int i = 0; i < tableSchema.getColumns().size(); i++) {
-                fieldNames.add(tableSchema.getColumns().get(i).getName());
+                String fieldName = tableSchema.getColumns().get(i).getName();
+                fieldNames.add(fieldName);
                 TypeInfo maxcomputeTypeInfo = tableSchema.getColumns().get(i).getTypeInfo();
                 SeaTunnelDataType<?> seaTunnelDataType =
-                        maxcompute2SeaTunnelType(maxcomputeTypeInfo);
+                        typeConvertor.toSeaTunnelType(fieldName, maxcomputeTypeInfo, null);
                 seaTunnelDataTypes.add(seaTunnelDataType);
             }
         } catch (Exception e) {
-            throw new MaxcomputeConnectorException(CommonErrorCode.TABLE_SCHEMA_GET_FAILED, e);
+            throw new MaxcomputeConnectorException(
+                    CommonErrorCodeDeprecated.TABLE_SCHEMA_GET_FAILED, e);
         }
         return new SeaTunnelRowType(
                 fieldNames.toArray(new String[fieldNames.size()]),
                 seaTunnelDataTypes.toArray(new SeaTunnelDataType<?>[seaTunnelDataTypes.size()]));
-    }
-
-    private static SeaTunnelDataType<?> maxcompute2SeaTunnelType(TypeInfo typeInfo) {
-        switch (typeInfo.getOdpsType()) {
-            case MAP:
-                MapTypeInfo mapTypeInfo = (MapTypeInfo) typeInfo;
-                return new MapType(
-                        maxcompute2SeaTunnelType(mapTypeInfo.getKeyTypeInfo()),
-                        maxcompute2SeaTunnelType(mapTypeInfo.getValueTypeInfo()));
-            case ARRAY:
-                ArrayTypeInfo arrayTypeInfo = (ArrayTypeInfo) typeInfo;
-                switch (arrayTypeInfo.getElementTypeInfo().getOdpsType()) {
-                    case BOOLEAN:
-                        return ArrayType.BOOLEAN_ARRAY_TYPE;
-                    case INT:
-                        return ArrayType.INT_ARRAY_TYPE;
-                    case BIGINT:
-                        return ArrayType.LONG_ARRAY_TYPE;
-                    case FLOAT:
-                        return ArrayType.FLOAT_ARRAY_TYPE;
-                    case DOUBLE:
-                        return ArrayType.DOUBLE_ARRAY_TYPE;
-                    case STRING:
-                        return ArrayType.STRING_ARRAY_TYPE;
-                    default:
-                        throw new MaxcomputeConnectorException(
-                                CommonErrorCode.UNSUPPORTED_DATA_TYPE,
-                                String.format(
-                                        "SeaTunnel type not support this type [%s] now",
-                                        typeInfo.getTypeName()));
-                }
-            case STRUCT:
-                StructTypeInfo structTypeInfo = (StructTypeInfo) typeInfo;
-                List<TypeInfo> fields = structTypeInfo.getFieldTypeInfos();
-                List<String> fieldNames = new ArrayList<>(fields.size());
-                List<SeaTunnelDataType<?>> fieldTypes = new ArrayList<>(fields.size());
-                for (TypeInfo field : fields) {
-                    fieldNames.add(field.getTypeName());
-                    fieldTypes.add(maxcompute2SeaTunnelType(field));
-                }
-                return new SeaTunnelRowType(
-                        fieldNames.toArray(new String[0]),
-                        fieldTypes.toArray(new SeaTunnelDataType[0]));
-            case TINYINT:
-                return BasicType.BYTE_TYPE;
-            case SMALLINT:
-                return BasicType.SHORT_TYPE;
-            case INT:
-                return BasicType.INT_TYPE;
-            case BIGINT:
-                return BasicType.LONG_TYPE;
-            case BINARY:
-                return PrimitiveByteArrayType.INSTANCE;
-            case FLOAT:
-                return BasicType.FLOAT_TYPE;
-            case DOUBLE:
-                return BasicType.DOUBLE_TYPE;
-            case DECIMAL:
-                DecimalTypeInfo decimalTypeInfo = (DecimalTypeInfo) typeInfo;
-                return new DecimalType(decimalTypeInfo.getPrecision(), decimalTypeInfo.getScale());
-            case VARCHAR:
-            case CHAR:
-            case STRING:
-                return BasicType.STRING_TYPE;
-            case DATE:
-                return LocalTimeType.LOCAL_DATE_TYPE;
-            case DATETIME:
-            case TIMESTAMP:
-                return LocalTimeType.LOCAL_DATE_TIME_TYPE;
-            case BOOLEAN:
-                return BasicType.BOOLEAN_TYPE;
-            case VOID:
-                return BasicType.VOID_TYPE;
-            case INTERVAL_DAY_TIME:
-            case INTERVAL_YEAR_MONTH:
-            default:
-                throw new MaxcomputeConnectorException(
-                        CommonErrorCode.UNSUPPORTED_DATA_TYPE,
-                        String.format(
-                                "SeaTunnel type not support this type [%s] now",
-                                typeInfo.getTypeName()));
-        }
     }
 
     private static Object resolveObject2SeaTunnel(Object field, SeaTunnelDataType<?> fieldType) {
@@ -213,7 +137,7 @@ public class MaxcomputeTypeMapper implements Serializable {
                         return origArray.toArray(new Double[0]);
                     default:
                         throw new MaxcomputeConnectorException(
-                                CommonErrorCode.UNSUPPORTED_DATA_TYPE,
+                                CommonErrorCodeDeprecated.UNSUPPORTED_DATA_TYPE,
                                 String.format(
                                         "SeaTunnel type not support this type [%s] now",
                                         fieldType.getSqlType().name()));
@@ -245,11 +169,10 @@ public class MaxcomputeTypeMapper implements Serializable {
             case DOUBLE:
             case BIGINT:
             case BOOLEAN:
+            case DECIMAL:
                 return field;
             case BYTES:
                 return ((Binary) field).data();
-            case DECIMAL:
-                return null;
             case STRING:
                 if (field instanceof byte[]) {
                     return new String((byte[]) field);
@@ -273,7 +196,7 @@ public class MaxcomputeTypeMapper implements Serializable {
             case NULL:
             default:
                 throw new MaxcomputeConnectorException(
-                        CommonErrorCode.UNSUPPORTED_DATA_TYPE,
+                        CommonErrorCodeDeprecated.UNSUPPORTED_DATA_TYPE,
                         String.format(
                                 "SeaTunnel type not support this type [%s] now",
                                 fieldType.getSqlType().name()));
@@ -288,7 +211,7 @@ public class MaxcomputeTypeMapper implements Serializable {
             case ARRAY:
                 ArrayList<Object> origArray = new ArrayList<>();
                 Arrays.stream((Object[]) field).iterator().forEachRemaining(origArray::add);
-                switch (((SimpleArrayTypeInfo) typeInfo).getElementTypeInfo().getOdpsType()) {
+                switch (((ArrayTypeInfo) typeInfo).getElementTypeInfo().getOdpsType()) {
                     case STRING:
                     case BOOLEAN:
                     case INT:
@@ -298,15 +221,15 @@ public class MaxcomputeTypeMapper implements Serializable {
                         return origArray;
                     default:
                         throw new MaxcomputeConnectorException(
-                                CommonErrorCode.UNSUPPORTED_DATA_TYPE,
+                                CommonErrorCodeDeprecated.UNSUPPORTED_DATA_TYPE,
                                 String.format(
                                         "Maxcompute type not support this type [%s] now",
                                         typeInfo.getTypeName()));
                 }
             case MAP:
                 HashMap<Object, Object> dataMap = new HashMap<>();
-                TypeInfo keyTypeInfo = ((SimpleMapTypeInfo) typeInfo).getKeyTypeInfo();
-                TypeInfo valueTypeInfo = ((SimpleMapTypeInfo) typeInfo).getValueTypeInfo();
+                TypeInfo keyTypeInfo = ((MapTypeInfo) typeInfo).getKeyTypeInfo();
+                TypeInfo valueTypeInfo = ((MapTypeInfo) typeInfo).getValueTypeInfo();
                 HashMap<Object, Object> origDataMap = (HashMap<Object, Object>) field;
                 origDataMap.forEach(
                         (key, value) ->
@@ -316,7 +239,7 @@ public class MaxcomputeTypeMapper implements Serializable {
                 return origDataMap;
             case STRUCT:
                 Object[] fields = ((SeaTunnelRow) field).getFields();
-                List<TypeInfo> typeInfos = ((SimpleStructTypeInfo) typeInfo).getFieldTypeInfos();
+                List<TypeInfo> typeInfos = ((StructTypeInfo) typeInfo).getFieldTypeInfos();
                 ArrayList<Object> origStruct = new ArrayList<>();
                 for (int i = 0; i < fields.length; i++) {
                     origStruct.add(resolveObject2Maxcompute(fields[i], typeInfos.get(i)));
@@ -329,16 +252,17 @@ public class MaxcomputeTypeMapper implements Serializable {
             case DOUBLE:
             case BIGINT:
             case BOOLEAN:
+            case DECIMAL:
+            case TIMESTAMP_NTZ:
                 return field;
             case BINARY:
                 return new Binary((byte[]) field);
-            case DECIMAL:
-                return null;
             case VARCHAR:
                 return new Varchar((String) field);
             case CHAR:
                 return new Char((String) field);
             case STRING:
+            case JSON:
                 if (field instanceof byte[]) {
                     return new String((byte[]) field);
                 }
@@ -355,7 +279,7 @@ public class MaxcomputeTypeMapper implements Serializable {
                 return Date.valueOf((LocalDate) field);
             default:
                 throw new MaxcomputeConnectorException(
-                        CommonErrorCode.UNSUPPORTED_DATA_TYPE,
+                        CommonErrorCodeDeprecated.UNSUPPORTED_DATA_TYPE,
                         String.format(
                                 "Maxcompute type not support this type [%s] now",
                                 typeInfo.getTypeName()));

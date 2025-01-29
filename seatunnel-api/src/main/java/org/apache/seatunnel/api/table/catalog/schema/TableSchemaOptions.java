@@ -17,22 +17,86 @@
 
 package org.apache.seatunnel.api.table.catalog.schema;
 
+import org.apache.seatunnel.shade.com.fasterxml.jackson.annotation.JsonProperty;
 import org.apache.seatunnel.shade.com.fasterxml.jackson.core.type.TypeReference;
 
 import org.apache.seatunnel.api.configuration.Option;
 import org.apache.seatunnel.api.configuration.Options;
 import org.apache.seatunnel.api.table.catalog.ConstraintKey;
 
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
 import java.util.List;
 import java.util.Map;
 
 public class TableSchemaOptions {
+
+    public static class TableIdentifierOptions {
+
+        public static final Option<Boolean> SCHEMA_FIRST =
+                Options.key("schema_first")
+                        .booleanType()
+                        .defaultValue(false)
+                        .withDescription("Parse Schema First from table");
+
+        public static final Option<String> TABLE =
+                Options.key("table")
+                        .stringType()
+                        .noDefaultValue()
+                        .withDescription("SeaTunnel Schema Full Table Name");
+
+        public static final Option<String> COMMENT =
+                Options.key("comment")
+                        .stringType()
+                        .noDefaultValue()
+                        .withDescription("SeaTunnel Schema Table Comment");
+
+        public static final Option<String> DATABASE_NAME =
+                Options.key("database_name")
+                        .stringType()
+                        .noDefaultValue()
+                        .withDescription("SeaTunnel Schema Database Name");
+
+        public static final Option<String> SCHEMA_NAME =
+                Options.key("schema_name")
+                        .stringType()
+                        .noDefaultValue()
+                        .withDescription("SeaTunnel Schema Table Name");
+
+        public static final Option<String> TABLE_NAME =
+                Options.key("table_name")
+                        .stringType()
+                        .noDefaultValue()
+                        .withDescription("SeaTunnel Schema Table Name");
+    }
+
+    @Data
+    @NoArgsConstructor(force = true)
+    public static class TableIdentifier {
+        @JsonProperty("database_name")
+        private final String databaseName;
+
+        @JsonProperty("schema_name")
+        private final String schemaName;
+
+        @JsonProperty("table_name")
+        private final String tableName;
+    }
 
     public static final Option<Map<String, Object>> SCHEMA =
             Options.key("schema")
                     .type(new TypeReference<Map<String, Object>>() {})
                     .noDefaultValue()
                     .withDescription("SeaTunnel Schema");
+
+    public static final Option<List<Map<String, Object>>> TABLE_CONFIGS =
+            Options.key("tables_configs")
+                    .type(new TypeReference<List<Map<String, Object>>>() {})
+                    .noDefaultValue()
+                    .withDescription(
+                            "SeaTunnel Multi Table Schema, acts on unstructed data sources. "
+                                    + "such as file, assert, mongodb, etc");
 
     // We should use ColumnOptions instead of FieldOptions
     @Deprecated
@@ -65,10 +129,16 @@ public class TableSchemaOptions {
                         .noDefaultValue()
                         .withDescription("SeaTunnel Schema Column Type");
 
-        public static final Option<Integer> COLUMN_LENGTH =
-                Options.key("columnLength")
+        public static final Option<Integer> COLUMN_SCALE =
+                Options.key("columnScale")
                         .intType()
-                        .defaultValue(0)
+                        .noDefaultValue()
+                        .withDescription("SeaTunnel Schema Column scale");
+
+        public static final Option<Long> COLUMN_LENGTH =
+                Options.key("columnLength")
+                        .longType()
+                        .defaultValue(0L)
                         .withDescription("SeaTunnel Schema Column Length");
 
         public static final Option<Boolean> NULLABLE =

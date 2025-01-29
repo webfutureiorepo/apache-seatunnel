@@ -12,7 +12,7 @@
 > Flink<br/>
 > SeaTunnel Zeta<br/>
 
-## Key features
+## Key Features
 
 - [x] [exactly-once](../../concept/connector-v2-features.md)
 
@@ -32,11 +32,12 @@ Write Rows to a Apache RocketMQ topic.
 | access.key           | String  | no       |                          | When ACL_ENABLED is true, access key cannot be empty                                                                                                                |
 | secret.key           | String  | no       |                          | When ACL_ENABLED is true, secret key cannot be empty                                                                                                                |
 | producer.group       | String  | no       | SeaTunnel-producer-Group | SeaTunnel-producer-Group                                                                                                                                            |
+| tag                  | String  | no       | -                        | `RocketMQ` message tag.                                                                                                                                             |
 | partition.key.fields | array   | no       | -                        | -                                                                                                                                                                   |
 | format               | String  | no       | json                     | Data format. The default format is json. Optional text format. The default field separator is ",".If you customize the delimiter, add the "field_delimiter" option. |
 | field.delimiter      | String  | no       | ,                        | Customize the field delimiter for data format.                                                                                                                      |
 | producer.send.sync   | Boolean | no       | false                    | If true, the message will be sync sent.                                                                                                                             |
-| common-options       | config  | no       | -                        | Sink plugin common parameters, please refer to [Sink Common Options](common-options.md) for details.                                                                |
+| common-options       | config  | no       | -                        | Sink plugin common parameters, please refer to [Sink Common Options](../sink-common-options.md) for details.                                                        |
 
 ### partition.key.fields [array]
 
@@ -61,7 +62,7 @@ If name is set as the key, then the hash value of the name column will determine
 
 ```hocon
 env {
-  execution.parallelism = 1
+  parallelism = 1
 }
 
 source {
@@ -107,14 +108,14 @@ sink {
 
 ```hocon
 env {
-  execution.parallelism = 1
+  parallelism = 1
 }
 
 source {
   Rocketmq {
     name.srv.addr = "localhost:9876"
     topics = "test_topic"
-    result_table_name = "rocketmq_table"
+    plugin_output = "rocketmq_table"
     schema = {
       fields {
         c_map = "map<string, string>"
@@ -152,7 +153,7 @@ sink {
 ```hocon
 
 env {
-  execution.parallelism = 1
+  parallelism = 1
   job.mode = "STREAMING"
 }
 
@@ -160,7 +161,7 @@ source {
   Rocketmq {
     name.srv.addr = "localhost:9876"
     topics = "test_topic"
-    result_table_name = "rocketmq_table"
+    plugin_output = "rocketmq_table"
     start.mode = "CONSUME_FROM_FIRST_OFFSET"
     batch.size = "400"
     consumer.group = "test_topic_group"

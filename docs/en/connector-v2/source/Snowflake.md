@@ -25,14 +25,14 @@ Read external data source data through JDBC.
 
 ## Supported DataSource list
 
-| datasource |                    supported versions                    |                  driver                   |                          url                           |                                    maven                                    |
-|------------|----------------------------------------------------------|-------------------------------------------|--------------------------------------------------------|-----------------------------------------------------------------------------|
-| snowflake  | Different dependency version has different driver class. | net.snowflake.client.jdbc.SnowflakeDriver | jdbc:snowflake://<account_name>.snowflakecomputing.com | [Download](https://mvnrepository.com/artifact/net.snowflake/snowflake-jdbc) |
+| datasource |                    supported versions                    |                  driver                   |                            url                             |                                    maven                                    |
+|------------|----------------------------------------------------------|-------------------------------------------|------------------------------------------------------------|-----------------------------------------------------------------------------|
+| snowflake  | Different dependency version has different driver class. | net.snowflake.client.jdbc.SnowflakeDriver | jdbc&#58;snowflake://<account_name>.snowflakecomputing.com | [Download](https://mvnrepository.com/artifact/net.snowflake/snowflake-jdbc) |
 
 ## Database dependency
 
-> Please download the support list corresponding to 'Maven' and copy it to the '$SEATNUNNEL_HOME/plugins/jdbc/lib/' working directory<br/>
-> For example Snowflake datasource: cp snowflake-connector-java-xxx.jar $SEATNUNNEL_HOME/plugins/jdbc/lib/
+> Please download the support list corresponding to 'Maven' and copy it to the '$SEATUNNEL_HOME/plugins/jdbc/lib/' working directory<br/>
+> For example Snowflake datasource: cp snowflake-connector-java-xxx.jar $SEATUNNEL_HOME/plugins/jdbc/lib/
 >
   ## Data Type Mapping
 
@@ -58,7 +58,7 @@ Read external data source data through JDBC.
 
 |             name             |    type    | required |     default     |                                                                                                                            description                                                                                                                            |
 |------------------------------|------------|----------|-----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| url                          | String     | Yes      | -               | The URL of the JDBC connection. Refer to a case: jdbc:snowflake://<account_name>.snowflakecomputing.com                                                                                                                                                           |
+| url                          | String     | Yes      | -               | The URL of the JDBC connection. Refer to a case: jdbc&#58;snowflake://<account_name>.snowflakecomputing.com                                                                                                                                                       |
 | driver                       | String     | Yes      | -               | The jdbc class name used to connect to the remote data source,<br/> if you use Snowflake the value is `net.snowflake.client.jdbc.SnowflakeDriver`.                                                                                                                |
 | user                         | String     | No       | -               | Connection instance user name                                                                                                                                                                                                                                     |
 | password                     | String     | No       | -               | Connection instance password                                                                                                                                                                                                                                      |
@@ -69,7 +69,8 @@ Read external data source data through JDBC.
 | partition_upper_bound        | BigDecimal | No       | -               | The partition_column max value for scan, if not set SeaTunnel will query database get max value.                                                                                                                                                                  |
 | partition_num                | Int        | No       | job parallelism | The number of partition count, only support positive integer. default value is job parallelism                                                                                                                                                                    |
 | fetch_size                   | Int        | No       | 0               | For queries that return a large number of objects,you can configure<br/> the row fetch size used in the query toimprove performance by<br/> reducing the number database hits required to satisfy the selection criteria.<br/> Zero means use jdbc default value. |
-| common-options               |            | No       | -               | Source plugin common parameters, please refer to [Source Common Options](common-options.md) for details                                                                                                                                                           |
+| properties                   | Map        | No       | -               | Additional connection configuration parameters,when properties and URL have the same parameters, the priority is determined by the <br/>specific implementation of the driver. For example, in MySQL, properties take precedence over the URL.                    |
+| common-options               |            | No       | -               | Source plugin common parameters, please refer to [Source Common Options](../source-common-options.md) for details                                                                                                                                                 |
 
 ## tips
 
@@ -86,8 +87,7 @@ Read external data source data through JDBC.
 > ```
 > # Defining the runtime environment
 > env {
-> # You can set flink configuration here
-> execution.parallelism = 2
+> parallelism = 2
 > job.mode = "BATCH"
 > }
 > source{

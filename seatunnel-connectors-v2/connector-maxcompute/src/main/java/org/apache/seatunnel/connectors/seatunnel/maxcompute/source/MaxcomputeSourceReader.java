@@ -19,12 +19,13 @@ package org.apache.seatunnel.connectors.seatunnel.maxcompute.source;
 
 import org.apache.seatunnel.shade.com.typesafe.config.Config;
 
+import org.apache.seatunnel.api.configuration.ReadonlyConfig;
 import org.apache.seatunnel.api.source.Boundedness;
 import org.apache.seatunnel.api.source.Collector;
 import org.apache.seatunnel.api.source.SourceReader;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
-import org.apache.seatunnel.common.exception.CommonErrorCode;
+import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.connectors.seatunnel.maxcompute.exception.MaxcomputeConnectorException;
 import org.apache.seatunnel.connectors.seatunnel.maxcompute.util.MaxcomputeTypeMapper;
 import org.apache.seatunnel.connectors.seatunnel.maxcompute.util.MaxcomputeUtil;
@@ -67,7 +68,8 @@ public class MaxcomputeSourceReader implements SourceReader<SeaTunnelRow, Maxcom
                 source -> {
                     try {
                         TableTunnel.DownloadSession session =
-                                MaxcomputeUtil.getDownloadSession(pluginConfig);
+                                MaxcomputeUtil.getDownloadSession(
+                                        ReadonlyConfig.fromConfig(pluginConfig));
                         TunnelRecordReader recordReader =
                                 session.openRecordReader(source.getSplitId(), source.getRowNum());
                         log.info("open record reader success");
@@ -81,7 +83,7 @@ public class MaxcomputeSourceReader implements SourceReader<SeaTunnelRow, Maxcom
                         recordReader.close();
                     } catch (Exception e) {
                         throw new MaxcomputeConnectorException(
-                                CommonErrorCode.READER_OPERATION_FAILED, e);
+                                CommonErrorCodeDeprecated.READER_OPERATION_FAILED, e);
                     }
                 });
         if (this.noMoreSplit && Boundedness.BOUNDED.equals(context.getBoundedness())) {

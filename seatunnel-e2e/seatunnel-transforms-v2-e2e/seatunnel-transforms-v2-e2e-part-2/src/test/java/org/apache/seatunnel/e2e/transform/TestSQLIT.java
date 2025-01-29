@@ -17,7 +17,9 @@
 
 package org.apache.seatunnel.e2e.transform;
 
+import org.apache.seatunnel.e2e.common.container.EngineType;
 import org.apache.seatunnel.e2e.common.container.TestContainer;
+import org.apache.seatunnel.e2e.common.junit.DisabledOnContainer;
 
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.TestTemplate;
@@ -46,11 +48,52 @@ public class TestSQLIT extends TestSuiteBase {
         Container.ExecResult sqlFuncSystem =
                 container.executeJob("/sql_transform/func_system.conf");
         Assertions.assertEquals(0, sqlFuncSystem.getExitCode());
+        Container.ExecResult sqlFuncFromUnixtime =
+                container.executeJob("/sql_transform/func_from_unixtime.conf");
+        Assertions.assertEquals(0, sqlFuncFromUnixtime.getExitCode());
         Container.ExecResult sqlCriteriaFilter =
                 container.executeJob("/sql_transform/criteria_filter.conf");
         Assertions.assertEquals(0, sqlCriteriaFilter.getExitCode());
         Container.ExecResult sqlAllColumns =
                 container.executeJob("/sql_transform/sql_all_columns.conf");
         Assertions.assertEquals(0, sqlAllColumns.getExitCode());
+        Container.ExecResult caseWhenSql = container.executeJob("/sql_transform/case_when.conf");
+        Assertions.assertEquals(0, caseWhenSql.getExitCode());
+
+        Container.ExecResult execResultBySql =
+                container.executeJob("/sql_transform/explode_transform.conf");
+        Assertions.assertEquals(0, execResultBySql.getExitCode());
+
+        Container.ExecResult execResultBySqlWithoutOuter =
+                container.executeJob("/sql_transform/explode_transform_without_outer.conf");
+        Assertions.assertEquals(0, execResultBySqlWithoutOuter.getExitCode());
+
+        Container.ExecResult execResultBySqlWithOuter =
+                container.executeJob("/sql_transform/explode_transform_with_outer.conf");
+        Assertions.assertEquals(0, execResultBySqlWithOuter.getExitCode());
+
+        Container.ExecResult arraySql = container.executeJob("/sql_transform/func_array.conf");
+        Assertions.assertEquals(0, arraySql.getExitCode());
+
+        Container.ExecResult splitSql = container.executeJob("/sql_transform/func_split.conf");
+        Assertions.assertEquals(0, splitSql.getExitCode());
+    }
+
+    @TestTemplate
+    public void testSQLTransformMultiTable(TestContainer container)
+            throws IOException, InterruptedException {
+        Container.ExecResult sqlTransform = container.executeJob("/sql_transform.conf");
+        Assertions.assertEquals(0, sqlTransform.getExitCode());
+    }
+
+    @TestTemplate
+    @DisabledOnContainer(
+            value = {},
+            type = {EngineType.SPARK},
+            disabledReason = "Spark translation has some issue on map convert")
+    public void testInnerQuery(TestContainer container) throws IOException, InterruptedException {
+        Container.ExecResult innerQuerySql =
+                container.executeJob("/sql_transform/inner_query.conf");
+        Assertions.assertEquals(0, innerQuerySql.getExitCode());
     }
 }

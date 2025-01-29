@@ -19,12 +19,19 @@ package org.apache.seatunnel.connectors.seatunnel.kafka.source;
 
 import org.apache.seatunnel.api.configuration.util.OptionRule;
 import org.apache.seatunnel.api.source.SeaTunnelSource;
+import org.apache.seatunnel.api.source.SourceSplit;
+import org.apache.seatunnel.api.table.catalog.CatalogOptions;
+import org.apache.seatunnel.api.table.catalog.schema.TableSchemaOptions;
+import org.apache.seatunnel.api.table.connector.TableSource;
 import org.apache.seatunnel.api.table.factory.Factory;
 import org.apache.seatunnel.api.table.factory.TableSourceFactory;
+import org.apache.seatunnel.api.table.factory.TableSourceFactoryContext;
 import org.apache.seatunnel.connectors.seatunnel.kafka.config.Config;
 import org.apache.seatunnel.connectors.seatunnel.kafka.config.StartMode;
 
 import com.google.auto.service.AutoService;
+
+import java.io.Serializable;
 
 @AutoService(Factory.class)
 public class KafkaSourceFactory implements TableSourceFactory {
@@ -37,7 +44,9 @@ public class KafkaSourceFactory implements TableSourceFactory {
     @Override
     public OptionRule optionRule() {
         return OptionRule.builder()
-                .required(Config.TOPIC, Config.BOOTSTRAP_SERVERS)
+                .required(Config.BOOTSTRAP_SERVERS)
+                .exclusive(
+                        Config.TOPIC, TableSchemaOptions.TABLE_CONFIGS, CatalogOptions.TABLE_LIST)
                 .optional(
                         Config.START_MODE,
                         Config.PATTERN,
@@ -47,11 +56,18 @@ public class KafkaSourceFactory implements TableSourceFactory {
                         Config.SCHEMA,
                         Config.FORMAT,
                         Config.DEBEZIUM_RECORD_INCLUDE_SCHEMA,
+                        Config.DEBEZIUM_RECORD_TABLE_FILTER,
                         Config.KEY_PARTITION_DISCOVERY_INTERVAL_MILLIS)
                 .conditional(Config.START_MODE, StartMode.TIMESTAMP, Config.START_MODE_TIMESTAMP)
                 .conditional(
                         Config.START_MODE, StartMode.SPECIFIC_OFFSETS, Config.START_MODE_OFFSETS)
                 .build();
+    }
+
+    @Override
+    public <T, SplitT extends SourceSplit, StateT extends Serializable>
+            TableSource<T, SplitT, StateT> createSource(TableSourceFactoryContext context) {
+        return () -> (SeaTunnelSource<T, SplitT, StateT>) new KafkaSource(context.getOptions());
     }
 
     @Override

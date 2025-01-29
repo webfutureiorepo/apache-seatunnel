@@ -64,6 +64,13 @@ public class AssertConfig {
     public static final String COLUMN_DEFAULT_VALUE = "default_value";
     public static final String COLUMN_COMMENT = "comment";
 
+    public static class TableIdentifierRule {
+        public static final String TABLE_IDENTIFIER_RULE = "table_identifier_rule";
+
+        public static final String TABLE_IDENTIFIER_CATALOG_NAME = "catalog_name";
+        public static final String TABLE_IDENTIFIER_TABLE_NAME = "table";
+    }
+
     public static final Option<String> COMMENT =
             Options.key("comment")
                     .stringType()
@@ -76,4 +83,10 @@ public class AssertConfig {
                     .noDefaultValue()
                     .withDescription(
                             "Rule definition of user's available data. Each rule represents one field validation or row num validation.");
+
+    public static final Option<String> TABLE_PATH =
+            Options.key("table_path")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("table full path");
 }

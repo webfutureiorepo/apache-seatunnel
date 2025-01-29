@@ -19,9 +19,9 @@ package org.apache.seatunnel.translation.spark.source.scan;
 
 import org.apache.seatunnel.api.source.SeaTunnelSource;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
+import org.apache.seatunnel.translation.spark.execution.MultiTableManager;
 import org.apache.seatunnel.translation.spark.source.partition.batch.SeaTunnelBatch;
 import org.apache.seatunnel.translation.spark.source.partition.micro.SeaTunnelMicroBatch;
-import org.apache.seatunnel.translation.spark.utils.TypeConverterUtils;
 
 import org.apache.spark.sql.connector.read.Batch;
 import org.apache.spark.sql.connector.read.Scan;
@@ -29,36 +29,51 @@ import org.apache.spark.sql.connector.read.streaming.MicroBatchStream;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 
+import java.util.Map;
+
 public class SeaTunnelScan implements Scan {
 
     private final SeaTunnelSource<SeaTunnelRow, ?, ?> source;
 
     private final int parallelism;
+    private final String jobId;
 
     private final CaseInsensitiveStringMap caseInsensitiveStringMap;
+
+    private final MultiTableManager multiTableManager;
 
     public SeaTunnelScan(
             SeaTunnelSource<SeaTunnelRow, ?, ?> source,
             int parallelism,
-            CaseInsensitiveStringMap caseInsensitiveStringMap) {
+            String jobId,
+            CaseInsensitiveStringMap caseInsensitiveStringMap,
+            MultiTableManager multiTableManager) {
         this.source = source;
         this.parallelism = parallelism;
+        this.jobId = jobId;
         this.caseInsensitiveStringMap = caseInsensitiveStringMap;
+        this.multiTableManager = multiTableManager;
     }
 
     @Override
     public StructType readSchema() {
-        return (StructType) TypeConverterUtils.convert(source.getProducedType());
+        return multiTableManager.getTableSchema();
     }
 
     @Override
     public Batch toBatch() {
-        return new SeaTunnelBatch(source, parallelism);
+        Map<String, String> envOptions = caseInsensitiveStringMap.asCaseSensitiveMap();
+        return new SeaTunnelBatch(source, parallelism, jobId, envOptions, multiTableManager);
     }
 
     @Override
     public MicroBatchStream toMicroBatchStream(String checkpointLocation) {
         return new SeaTunnelMicroBatch(
-                source, parallelism, checkpointLocation, caseInsensitiveStringMap);
+                source,
+                parallelism,
+                jobId,
+                checkpointLocation,
+                caseInsensitiveStringMap,
+                multiTableManager);
     }
 }

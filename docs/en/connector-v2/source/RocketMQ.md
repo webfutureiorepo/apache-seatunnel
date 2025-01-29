@@ -12,7 +12,7 @@
 > Flink<br/>
 > SeaTunnel Zeta<br/>
 
-## Key features
+## Key Features
 
 - [x] [batch](../../concept/connector-v2-features.md)
 - [x] [stream](../../concept/connector-v2-features.md)
@@ -44,7 +44,7 @@ Source connector for Apache RocketMQ.
 | start.mode.offsets                  |         | no       |                            |                                                                                                                                                                                                                    |
 | start.mode.timestamp                | Long    | no       |                            | The time required for consumption mode to be "CONSUME_FROM_TIMESTAMP".                                                                                                                                             |
 | partition.discovery.interval.millis | long    | no       | -1                         | The interval for dynamically discovering topics and partitions.                                                                                                                                                    |
-| common-options                      | config  | no       | -                          | Source plugin common parameters, please refer to [Source Common Options](common-options.md) for details.                                                                                                           |
+| common-options                      | config  | no       | -                          | Source plugin common parameters, please refer to [Source Common Options](../source-common-options.md) for details.                                                                                                 |
 
 ### start.mode.offsets
 
@@ -68,7 +68,7 @@ start.mode.offsets = {
 
 ```hocon
 env {
-  execution.parallelism = 1
+  parallelism = 1
   job.mode = "BATCH"
 }
 
@@ -76,7 +76,7 @@ source {
   Rocketmq {
     name.srv.addr = "rocketmq-e2e:9876"
     topics = "test_topic_json"
-    result_table_name = "rocketmq_table"
+    plugin_output = "rocketmq_table"
     schema = {
       fields {
         id = bigint
@@ -116,7 +116,7 @@ sink {
 
 ```hocon
 env {
-  execution.parallelism = 1
+  parallelism = 1
   job.mode = "BATCH"
 }
 
@@ -124,7 +124,7 @@ source {
   Rocketmq {
     name.srv.addr = "localhost:9876"
     topics = "test_topic"
-    result_table_name = "rocketmq_table"
+    plugin_output = "rocketmq_table"
     start.mode = "CONSUME_FROM_FIRST_OFFSET"
     batch.size = "400"
     consumer.group = "test_topic_group"
@@ -167,7 +167,7 @@ sink {
 
 ```hocon
 env {
-  execution.parallelism = 1
+  parallelism = 1
   spark.app.name = "SeaTunnel"
   spark.executor.instances = 2
   spark.executor.cores = 1

@@ -17,113 +17,51 @@
 
 package org.apache.seatunnel.connectors.seatunnel.starrocks.sink;
 
-import org.apache.seatunnel.api.sink.SaveModeConstants;
 import org.apache.seatunnel.api.table.catalog.Column;
-import org.apache.seatunnel.api.table.catalog.TableSchema;
 import org.apache.seatunnel.api.table.type.ArrayType;
 import org.apache.seatunnel.api.table.type.DecimalType;
 import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
-import org.apache.seatunnel.connectors.seatunnel.starrocks.util.CreateTableParser;
+import org.apache.seatunnel.connectors.seatunnel.common.util.CatalogUtil;
 
 import org.apache.commons.lang3.StringUtils;
 
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
+import lombok.extern.slf4j.Slf4j;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.seatunnel.shade.com.google.common.base.Preconditions.checkNotNull;
 
-public class StarRocksSaveModeUtil {
+@Slf4j
+public class StarRocksSaveModeUtil extends CatalogUtil {
 
-    public static String fillingCreateSql(
-            String template, String database, String table, TableSchema tableSchema) {
-        String primaryKey = "";
-        if (tableSchema.getPrimaryKey() != null) {
-            primaryKey =
-                    tableSchema.getPrimaryKey().getColumnNames().stream()
-                            .map(r -> "`" + r + "`")
-                            .collect(Collectors.joining(","));
-        }
-        template =
-                template.replaceAll(
-                        String.format("\\$\\{%s\\}", SaveModeConstants.ROWTYPE_PRIMARY_KEY),
-                        primaryKey);
-        Map<String, CreateTableParser.ColumnInfo> columnInTemplate =
-                CreateTableParser.getColumnList(template);
-        template = mergeColumnInTemplate(columnInTemplate, tableSchema, template);
+    public static final StarRocksSaveModeUtil INSTANCE = new StarRocksSaveModeUtil();
 
-        String rowTypeFields =
-                tableSchema.getColumns().stream()
-                        .filter(column -> !columnInTemplate.containsKey(column.getName()))
-                        .map(StarRocksSaveModeUtil::columnToStarrocksType)
-                        .collect(Collectors.joining(",\n"));
-        return template.replaceAll(
-                        String.format("\\$\\{%s\\}", SaveModeConstants.DATABASE), database)
-                .replaceAll(String.format("\\$\\{%s\\}", SaveModeConstants.TABLE_NAME), table)
-                .replaceAll(
-                        String.format("\\$\\{%s\\}", SaveModeConstants.ROWTYPE_FIELDS),
-                        rowTypeFields);
-    }
-
-    private static String columnToStarrocksType(Column column) {
+    public String columnToConnectorType(Column column) {
         checkNotNull(column, "The column is required.");
         return String.format(
-                "`%s` %s %s ",
+                "`%s` %s %s %s",
                 column.getName(),
-                dataTypeToStarrocksType(column.getDataType()),
-                column.isNullable() ? "NULL" : "NOT NULL");
+                dataTypeToStarrocksType(
+                        column.getDataType(),
+                        column.getColumnLength() == null ? 0 : column.getColumnLength()),
+                column.isNullable() ? "NULL" : "NOT NULL",
+                StringUtils.isEmpty(column.getComment())
+                        ? ""
+                        : "COMMENT '"
+                                + column.getComment().replace("'", "''").replace("\\", "\\\\")
+                                + "'");
     }
 
-    private static String mergeColumnInTemplate(
-            Map<String, CreateTableParser.ColumnInfo> columnInTemplate,
-            TableSchema tableSchema,
-            String template) {
-        int offset = 0;
-        Map<String, Column> columnMap =
-                tableSchema.getColumns().stream()
-                        .collect(Collectors.toMap(Column::getName, Function.identity()));
-        List<CreateTableParser.ColumnInfo> columnInfosInSeq =
-                columnInTemplate.values().stream()
-                        .sorted(
-                                Comparator.comparingInt(
-                                        CreateTableParser.ColumnInfo::getStartIndex))
-                        .collect(Collectors.toList());
-        for (CreateTableParser.ColumnInfo columnInfo : columnInfosInSeq) {
-            String col = columnInfo.getName();
-            if (StringUtils.isEmpty(columnInfo.getInfo())) {
-                if (columnMap.containsKey(col)) {
-                    Column column = columnMap.get(col);
-                    String newCol = columnToStarrocksType(column);
-                    String prefix = template.substring(0, columnInfo.getStartIndex() + offset);
-                    String suffix = template.substring(offset + columnInfo.getEndIndex());
-                    if (prefix.endsWith("`")) {
-                        prefix = prefix.substring(0, prefix.length() - 1);
-                        offset--;
-                    }
-                    if (suffix.startsWith("`")) {
-                        suffix = suffix.substring(1);
-                        offset--;
-                    }
-                    template = prefix + newCol + suffix;
-                    offset += newCol.length() - columnInfo.getName().length();
-                } else {
-                    throw new IllegalArgumentException("Can't find column " + col + " in table.");
-                }
-            }
-        }
-        return template;
-    }
-
-    private static String dataTypeToStarrocksType(SeaTunnelDataType<?> dataType) {
+    private static String dataTypeToStarrocksType(SeaTunnelDataType<?> dataType, long length) {
         checkNotNull(dataType, "The SeaTunnel's data type is required.");
         switch (dataType.getSqlType()) {
             case NULL:
             case TIME:
-                throw new IllegalArgumentException(
-                        "Unsupported SeaTunnel's data type: " + dataType);
+                return "VARCHAR(8)";
             case STRING:
+                if (length > 65533 || length <= 0) {
+                    return "STRING";
+                } else {
+                    return "VARCHAR(" + length + ")";
+                }
             case BYTES:
                 return "STRING";
             case BOOLEAN:
@@ -146,7 +84,8 @@ public class StarRocksSaveModeUtil {
                 return "DATETIME";
             case ARRAY:
                 return "ARRAY<"
-                        + dataTypeToStarrocksType(((ArrayType<?, ?>) dataType).getElementType())
+                        + dataTypeToStarrocksType(
+                                ((ArrayType<?, ?>) dataType).getElementType(), Long.MAX_VALUE)
                         + ">";
             case DECIMAL:
                 DecimalType decimalType = (DecimalType) dataType;

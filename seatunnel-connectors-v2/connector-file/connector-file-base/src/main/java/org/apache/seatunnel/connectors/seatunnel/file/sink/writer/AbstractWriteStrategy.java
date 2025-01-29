@@ -17,32 +17,34 @@
 
 package org.apache.seatunnel.connectors.seatunnel.file.sink.writer;
 
+import org.apache.seatunnel.shade.com.google.common.collect.Lists;
+
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
 import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
 import org.apache.seatunnel.common.Constants;
-import org.apache.seatunnel.common.exception.CommonErrorCode;
+import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.common.utils.VariablesSubstitute;
 import org.apache.seatunnel.connectors.seatunnel.file.config.BaseSinkConfig;
 import org.apache.seatunnel.connectors.seatunnel.file.config.CompressFormat;
 import org.apache.seatunnel.connectors.seatunnel.file.config.FileFormat;
 import org.apache.seatunnel.connectors.seatunnel.file.config.HadoopConf;
 import org.apache.seatunnel.connectors.seatunnel.file.exception.FileConnectorException;
+import org.apache.seatunnel.connectors.seatunnel.file.hadoop.HadoopFileSystemProxy;
 import org.apache.seatunnel.connectors.seatunnel.file.sink.commit.FileCommitInfo;
 import org.apache.seatunnel.connectors.seatunnel.file.sink.config.FileSinkConfig;
 import org.apache.seatunnel.connectors.seatunnel.file.sink.state.FileSinkState;
-import org.apache.seatunnel.connectors.seatunnel.file.sink.util.FileSystemUtils;
 
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.CommonConfigurationKeys;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.collect.Lists;
 import lombok.NonNull;
+import lombok.SneakyThrows;
 
 import java.io.File;
 import java.io.IOException;
@@ -58,12 +60,7 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.stream.Collectors;
 
-import static org.apache.parquet.avro.AvroReadSupport.READ_INT96_AS_FIXED;
-import static org.apache.parquet.avro.AvroSchemaConverter.ADD_LIST_ELEMENT_RECORDS;
-import static org.apache.parquet.avro.AvroWriteSupport.WRITE_FIXED_AS_INT96;
-import static org.apache.parquet.avro.AvroWriteSupport.WRITE_OLD_LIST_STRUCTURE;
-
-public abstract class AbstractWriteStrategy implements WriteStrategy {
+public abstract class AbstractWriteStrategy<T> implements WriteStrategy<T> {
     protected final Logger log = LoggerFactory.getLogger(this.getClass());
     protected final FileSinkConfig fileSinkConfig;
     protected final CompressFormat compressFormat;
@@ -71,7 +68,7 @@ public abstract class AbstractWriteStrategy implements WriteStrategy {
     protected String jobId;
     protected int subTaskIndex;
     protected HadoopConf hadoopConf;
-    protected FileSystemUtils fileSystemUtils;
+    protected HadoopFileSystemProxy hadoopFileSystemProxy;
     protected String transactionId;
     /** The uuid prefix to make sure same job different file sink will not conflict. */
     protected String uuidPrefix;
@@ -86,14 +83,15 @@ public abstract class AbstractWriteStrategy implements WriteStrategy {
     protected Long checkpointId = 0L;
     protected int partId = 0;
     protected int batchSize;
+    protected boolean singleFileMode;
     protected int currentBatchSize = 0;
-    protected boolean isKerberosAuthorization = false;
 
     public AbstractWriteStrategy(FileSinkConfig fileSinkConfig) {
         this.fileSinkConfig = fileSinkConfig;
         this.sinkColumnsIndexInRow = fileSinkConfig.getSinkColumnsIndexInRow();
         this.batchSize = fileSinkConfig.getBatchSize();
         this.compressFormat = fileSinkConfig.getCompressFormat();
+        this.singleFileMode = fileSinkConfig.isSingleFileMode();
     }
 
     /**
@@ -104,6 +102,7 @@ public abstract class AbstractWriteStrategy implements WriteStrategy {
     @Override
     public void init(HadoopConf conf, String jobId, String uuidPrefix, int subTaskIndex) {
         this.hadoopConf = conf;
+        this.hadoopFileSystemProxy = new HadoopFileSystemProxy(conf);
         this.jobId = jobId;
         this.subTaskIndex = subTaskIndex;
         this.uuidPrefix = uuidPrefix;
@@ -111,7 +110,7 @@ public abstract class AbstractWriteStrategy implements WriteStrategy {
 
     @Override
     public void write(SeaTunnelRow seaTunnelRow) throws FileConnectorException {
-        if (currentBatchSize >= batchSize) {
+        if (currentBatchSize >= batchSize && !singleFileMode) {
             newFilePart();
             currentBatchSize = 0;
         }
@@ -148,32 +147,19 @@ public abstract class AbstractWriteStrategy implements WriteStrategy {
      */
     @Override
     public Configuration getConfiguration(HadoopConf hadoopConf) {
-        Configuration configuration = new Configuration();
-        configuration.setBoolean(READ_INT96_AS_FIXED, true);
-        configuration.setBoolean(WRITE_FIXED_AS_INT96, true);
-        configuration.setBoolean(ADD_LIST_ELEMENT_RECORDS, false);
-        configuration.setBoolean(WRITE_OLD_LIST_STRUCTURE, false);
-        configuration.set(CommonConfigurationKeys.FS_DEFAULT_NAME_KEY, hadoopConf.getHdfsNameKey());
-        configuration.set(
-                String.format("fs.%s.impl", hadoopConf.getSchema()), hadoopConf.getFsHdfsImpl());
+        Configuration configuration = hadoopConf.toConfiguration();
         this.hadoopConf.setExtraOptionsForConfiguration(configuration);
-        String principal = hadoopConf.getKerberosPrincipal();
-        String keytabPath = hadoopConf.getKerberosKeytabPath();
-        if (!isKerberosAuthorization) {
-            FileSystemUtils.doKerberosAuthentication(configuration, principal, keytabPath);
-            isKerberosAuthorization = true;
-        }
         return configuration;
     }
 
     /**
      * set seaTunnelRowTypeInfo in writer
      *
-     * @param seaTunnelRowType seaTunnelRowType
+     * @param catalogTable seaTunnelRowType
      */
     @Override
-    public void setSeaTunnelRowTypeInfo(SeaTunnelRowType seaTunnelRowType) {
-        this.seaTunnelRowType = seaTunnelRowType;
+    public void setCatalogTable(CatalogTable catalogTable) {
+        this.seaTunnelRowType = catalogTable.getSeaTunnelRowType();
     }
 
     /**
@@ -235,7 +221,7 @@ public abstract class AbstractWriteStrategy implements WriteStrategy {
      * @return file name
      */
     @Override
-    public String generateFileName(String transactionId) {
+    public final String generateFileName(String transactionId) {
         String fileNameExpression = fileSinkConfig.getFileNameExpression();
         FileFormat fileFormat = fileSinkConfig.getFileFormat();
         String suffix = fileFormat.getSuffix();
@@ -251,8 +237,10 @@ public abstract class AbstractWriteStrategy implements WriteStrategy {
         valuesMap.put(Constants.NOW, formattedDate);
         valuesMap.put(timeFormat, formattedDate);
         valuesMap.put(BaseSinkConfig.TRANSACTION_EXPRESSION, transactionId);
-        String substitute =
-                VariablesSubstitute.substitute(fileNameExpression, valuesMap) + "_" + partId;
+        String substitute = VariablesSubstitute.substitute(fileNameExpression, valuesMap);
+        if (!singleFileMode) {
+            substitute += "_" + partId;
+        }
         return substitute + suffix;
     }
 
@@ -261,8 +249,13 @@ public abstract class AbstractWriteStrategy implements WriteStrategy {
      *
      * @return the file commit information
      */
+    @SneakyThrows
     @Override
     public Optional<FileCommitInfo> prepareCommit() {
+        if (this.needMoveFiles.isEmpty() && fileSinkConfig.isCreateEmptyFileWhenNoData()) {
+            String filePath = createFilePathWithoutPartition();
+            this.getOrCreateOutputStream(filePath);
+        }
         this.finishAndCloseFile();
         LinkedHashMap<String, String> commitMap = new LinkedHashMap<>(this.needMoveFiles);
         LinkedHashMap<String, List<String>> copyMap =
@@ -289,10 +282,10 @@ public abstract class AbstractWriteStrategy implements WriteStrategy {
      */
     public void abortPrepare(String transactionId) {
         try {
-            fileSystemUtils.deleteFile(getTransactionDir(transactionId));
+            hadoopFileSystemProxy.deleteFile(getTransactionDir(transactionId));
         } catch (IOException e) {
             throw new FileConnectorException(
-                    CommonErrorCode.FILE_OPERATION_FAILED,
+                    CommonErrorCodeDeprecated.WRITER_OPERATION_FAILED,
                     "Abort transaction "
                             + transactionId
                             + " error, delete transaction directory failed",
@@ -374,10 +367,25 @@ public abstract class AbstractWriteStrategy implements WriteStrategy {
         return String.join(File.separator, strings);
     }
 
+    public String createFilePathWithoutPartition() {
+        return getPathWithPartitionInfo(null, true);
+    }
+
     public String getOrCreateFilePathBeingWritten(@NonNull SeaTunnelRow seaTunnelRow) {
         LinkedHashMap<String, List<String>> dataPartitionDirAndValuesMap =
                 generatorPartitionDir(seaTunnelRow);
-        String beingWrittenFileKey = dataPartitionDirAndValuesMap.keySet().toArray()[0].toString();
+        boolean noPartition =
+                BaseSinkConfig.NON_PARTITION.equals(
+                        dataPartitionDirAndValuesMap.keySet().toArray()[0].toString());
+        return getPathWithPartitionInfo(dataPartitionDirAndValuesMap, noPartition);
+    }
+
+    private String getPathWithPartitionInfo(
+            LinkedHashMap<String, List<String>> dataPartitionDirAndValuesMap, boolean noPartition) {
+        String beingWrittenFileKey =
+                noPartition
+                        ? BaseSinkConfig.NON_PARTITION
+                        : dataPartitionDirAndValuesMap.keySet().toArray()[0].toString();
         // get filePath from beingWrittenFile
         String beingWrittenFilePath = beingWrittenFile.get(beingWrittenFileKey);
         if (beingWrittenFilePath != null) {
@@ -389,8 +397,7 @@ public abstract class AbstractWriteStrategy implements WriteStrategy {
                     };
             String newBeingWrittenFilePath = String.join(File.separator, pathSegments);
             beingWrittenFile.put(beingWrittenFileKey, newBeingWrittenFilePath);
-            if (!BaseSinkConfig.NON_PARTITION.equals(
-                    dataPartitionDirAndValuesMap.keySet().toArray()[0].toString())) {
+            if (!noPartition) {
                 partitionDirAndValuesMap.putAll(dataPartitionDirAndValuesMap);
             }
             return newBeingWrittenFilePath;
@@ -417,12 +424,17 @@ public abstract class AbstractWriteStrategy implements WriteStrategy {
     }
 
     @Override
-    public FileSystemUtils getFileSystemUtils() {
-        return fileSystemUtils;
+    public HadoopFileSystemProxy getHadoopFileSystemProxy() {
+        return hadoopFileSystemProxy;
     }
 
     @Override
-    public void setFileSystemUtils(FileSystemUtils fileSystemUtils) {
-        this.fileSystemUtils = fileSystemUtils;
+    public void close() throws IOException {
+        try {
+            if (hadoopFileSystemProxy != null) {
+                hadoopFileSystemProxy.close();
+            }
+        } catch (Exception ignore) {
+        }
     }
 }

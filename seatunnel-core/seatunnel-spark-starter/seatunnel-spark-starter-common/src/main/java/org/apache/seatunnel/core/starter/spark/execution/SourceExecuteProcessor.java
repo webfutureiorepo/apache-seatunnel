@@ -17,45 +17,60 @@
 
 package org.apache.seatunnel.core.starter.spark.execution;
 
+import org.apache.seatunnel.shade.com.google.common.collect.Lists;
 import org.apache.seatunnel.shade.com.typesafe.config.Config;
+import org.apache.seatunnel.shade.com.typesafe.config.ConfigValue;
 
 import org.apache.seatunnel.api.common.CommonOptions;
 import org.apache.seatunnel.api.common.JobContext;
+import org.apache.seatunnel.api.common.PluginIdentifier;
+import org.apache.seatunnel.api.configuration.ReadonlyConfig;
 import org.apache.seatunnel.api.source.SeaTunnelSource;
-import org.apache.seatunnel.api.table.factory.TableSourceFactory;
+import org.apache.seatunnel.api.source.SourceSplit;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
+import org.apache.seatunnel.api.table.factory.FactoryUtil;
 import org.apache.seatunnel.common.Constants;
 import org.apache.seatunnel.common.utils.SerializationUtils;
-import org.apache.seatunnel.core.starter.execution.PluginUtil;
 import org.apache.seatunnel.core.starter.execution.SourceTableInfo;
-import org.apache.seatunnel.plugin.discovery.PluginIdentifier;
-import org.apache.seatunnel.plugin.discovery.seatunnel.SeaTunnelFactoryDiscovery;
 import org.apache.seatunnel.plugin.discovery.seatunnel.SeaTunnelSourcePluginDiscovery;
-import org.apache.seatunnel.translation.spark.utils.TypeConverterUtils;
+import org.apache.seatunnel.translation.spark.execution.DatasetTableInfo;
 
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
-import org.apache.spark.sql.types.StructType;
 
-import com.google.common.collect.Lists;
+import scala.Tuple2;
 
+import java.io.Serializable;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 import static org.apache.seatunnel.api.common.CommonOptions.PLUGIN_NAME;
-import static org.apache.seatunnel.api.common.CommonOptions.RESULT_TABLE_NAME;
+import static org.apache.seatunnel.api.common.CommonOptions.PLUGIN_OUTPUT;
+import static org.apache.seatunnel.core.starter.execution.PluginUtil.ensureJobModeMatch;
 
 @SuppressWarnings("rawtypes")
 public class SourceExecuteProcessor extends SparkAbstractPluginExecuteProcessor<SourceTableInfo> {
     private static final String PLUGIN_TYPE = "source";
+    private Map envOption = new HashMap<String, String>();
 
     public SourceExecuteProcessor(
             SparkRuntimeEnvironment sparkEnvironment,
             JobContext jobContext,
             List<? extends Config> sourceConfigs) {
         super(sparkEnvironment, jobContext, sourceConfigs);
+        for (Map.Entry<String, ConfigValue> entry : sparkEnvironment.getConfig().entrySet()) {
+            String envKey = entry.getKey();
+            String envValue = entry.getValue().render();
+            if (envKey != null && envValue != null) {
+                envOption.put(envKey, envValue);
+            }
+        }
     }
 
     @Override
@@ -85,17 +100,13 @@ public class SourceExecuteProcessor extends SparkAbstractPluginExecuteProcessor<
                             .option(
                                     Constants.SOURCE_SERIALIZATION,
                                     SerializationUtils.objectToString(source))
-                            .schema(
-                                    (StructType)
-                                            TypeConverterUtils.convert(source.getProducedType()))
+                            .options(envOption)
                             .load();
             sources.add(
                     new DatasetTableInfo(
                             dataset,
-                            sourceTableInfo.getCatalogTables().get(0),
-                            pluginConfig.hasPath(RESULT_TABLE_NAME.key())
-                                    ? pluginConfig.getString(RESULT_TABLE_NAME.key())
-                                    : null));
+                            sourceTableInfo.getCatalogTables(),
+                            ReadonlyConfig.fromConfig(pluginConfig).get(PLUGIN_OUTPUT)));
             registerInputTempView(pluginConfigs.get(i), dataset);
         }
         return sources;
@@ -104,8 +115,9 @@ public class SourceExecuteProcessor extends SparkAbstractPluginExecuteProcessor<
     @Override
     protected List<SourceTableInfo> initializePlugins(List<? extends Config> pluginConfigs) {
         SeaTunnelSourcePluginDiscovery sourcePluginDiscovery = new SeaTunnelSourcePluginDiscovery();
-        SeaTunnelFactoryDiscovery factoryDiscovery =
-                new SeaTunnelFactoryDiscovery(TableSourceFactory.class);
+
+        Function<PluginIdentifier, SeaTunnelSource> fallbackCreateSource =
+                sourcePluginDiscovery::createPluginInstance;
 
         List<SourceTableInfo> sources = new ArrayList<>();
         Set<URL> jars = new HashSet<>();
@@ -115,14 +127,17 @@ public class SourceExecuteProcessor extends SparkAbstractPluginExecuteProcessor<
                             ENGINE_TYPE, PLUGIN_TYPE, sourceConfig.getString(PLUGIN_NAME.key()));
             jars.addAll(
                     sourcePluginDiscovery.getPluginJarPaths(Lists.newArrayList(pluginIdentifier)));
-            SourceTableInfo source =
-                    PluginUtil.createSource(
-                            factoryDiscovery,
-                            sourcePluginDiscovery,
-                            pluginIdentifier,
-                            sourceConfig,
-                            jobContext);
-            sources.add(source);
+            Tuple2<SeaTunnelSource<Object, SourceSplit, Serializable>, List<CatalogTable>> source =
+                    FactoryUtil.createAndPrepareSource(
+                            ReadonlyConfig.fromConfig(sourceConfig),
+                            Thread.currentThread().getContextClassLoader(),
+                            pluginIdentifier.getPluginName(),
+                            fallbackCreateSource,
+                            null);
+
+            source._1().setJobContext(jobContext);
+            ensureJobModeMatch(jobContext, source._1());
+            sources.add(new SourceTableInfo(source._1(), source._2()));
         }
         sparkRuntimeEnvironment.registerPlugin(new ArrayList<>(jars));
         return sources;

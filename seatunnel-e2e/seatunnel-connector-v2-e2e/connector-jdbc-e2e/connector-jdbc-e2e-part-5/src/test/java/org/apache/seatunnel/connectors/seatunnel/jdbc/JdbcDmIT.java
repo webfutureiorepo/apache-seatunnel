@@ -18,6 +18,8 @@
 
 package org.apache.seatunnel.connectors.seatunnel.jdbc;
 
+import org.apache.seatunnel.shade.com.google.common.collect.Lists;
+
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 
 import org.apache.commons.lang3.tuple.Pair;
@@ -25,8 +27,6 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
 import org.testcontainers.utility.DockerLoggerFactory;
-
-import com.google.common.collect.Lists;
 
 import java.math.BigDecimal;
 import java.sql.Date;
@@ -48,7 +48,7 @@ public class JdbcDmIT extends AbstractJdbcIT {
     private static final String DM_SINK = "e2e_table_sink";
     private static final String DM_USERNAME = "SYSDBA";
     private static final String DM_PASSWORD = "SYSDBA";
-    private static final int DM_PORT = 5236;
+    private static final int DM_PORT = 5336;
     private static final String DM_URL = "jdbc:dm://" + HOST + ":%s";
 
     private static final String DRIVER_CLASS = "dm.jdbc.driver.DmDriver";
@@ -127,11 +127,9 @@ public class JdbcDmIT extends AbstractJdbcIT {
                 .configFile(CONFIG_FILE)
                 .insertSql(insertSql)
                 .testData(testDataSet)
+                .tablePathFullName(String.format("%s.%s", DM_DATABASE, DM_SOURCE))
                 .build();
     }
-
-    @Override
-    void compareResult() {}
 
     @Override
     String driverUrl() {
@@ -222,6 +220,14 @@ public class JdbcDmIT extends AbstractJdbcIT {
         return Pair.of(fieldNames, rows);
     }
 
+    protected String buildTableInfoWithSchema(String database, String schema, String table) {
+        return buildTableInfoWithSchema(schema, table);
+    }
+
+    protected void clearTable(String database, String schema, String table) {
+        clearTable(schema, table);
+    }
+
     @Override
     protected GenericContainer<?> initContainer() {
         GenericContainer<?> container =
@@ -230,7 +236,7 @@ public class JdbcDmIT extends AbstractJdbcIT {
                         .withNetworkAliases(DM_CONTAINER_HOST)
                         .withLogConsumer(
                                 new Slf4jLogConsumer(DockerLoggerFactory.getLogger(DM_IMAGE)));
-        container.setPortBindings(Lists.newArrayList(String.format("%s:%s", 5236, 5236)));
+        container.setPortBindings(Lists.newArrayList(String.format("%s:%s", 5336, 5236)));
 
         return container;
     }

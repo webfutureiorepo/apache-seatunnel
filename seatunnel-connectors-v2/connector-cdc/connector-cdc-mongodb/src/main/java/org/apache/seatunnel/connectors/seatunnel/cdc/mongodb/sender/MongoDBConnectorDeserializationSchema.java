@@ -17,16 +17,22 @@
 
 package org.apache.seatunnel.connectors.seatunnel.cdc.mongodb.sender;
 
+import org.apache.seatunnel.shade.com.google.common.annotations.VisibleForTesting;
+
 import org.apache.seatunnel.api.source.Collector;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
+import org.apache.seatunnel.api.table.catalog.TablePath;
 import org.apache.seatunnel.api.table.type.ArrayType;
 import org.apache.seatunnel.api.table.type.DecimalType;
 import org.apache.seatunnel.api.table.type.MapType;
+import org.apache.seatunnel.api.table.type.MetadataUtil;
 import org.apache.seatunnel.api.table.type.RowKind;
 import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
 import org.apache.seatunnel.api.table.type.SqlType;
-import org.apache.seatunnel.connectors.cdc.debezium.DebeziumDeserializationSchema;
+import org.apache.seatunnel.connectors.cdc.base.utils.SourceRecordUtils;
+import org.apache.seatunnel.connectors.cdc.debezium.AbstractDebeziumDeserializationSchema;
 import org.apache.seatunnel.connectors.seatunnel.cdc.mongodb.exception.MongodbConnectorException;
 
 import org.apache.kafka.connect.data.Schema;
@@ -41,6 +47,8 @@ import org.bson.json.JsonWriterSettings;
 import org.bson.types.Decimal128;
 
 import com.mongodb.client.model.changestream.OperationType;
+import io.debezium.relational.TableId;
+import lombok.extern.slf4j.Slf4j;
 
 import javax.annotation.Nonnull;
 
@@ -57,33 +65,42 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-import static org.apache.seatunnel.common.exception.CommonErrorCode.ILLEGAL_ARGUMENT;
-import static org.apache.seatunnel.common.exception.CommonErrorCode.UNSUPPORTED_DATA_TYPE;
-import static org.apache.seatunnel.common.exception.CommonErrorCode.UNSUPPORTED_OPERATION;
+import static org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated.ILLEGAL_ARGUMENT;
+import static org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated.UNSUPPORTED_DATA_TYPE;
+import static org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated.UNSUPPORTED_OPERATION;
+import static org.apache.seatunnel.connectors.seatunnel.cdc.mongodb.config.MongodbSourceOptions.COLL_FIELD;
+import static org.apache.seatunnel.connectors.seatunnel.cdc.mongodb.config.MongodbSourceOptions.DB_FIELD;
 import static org.apache.seatunnel.connectors.seatunnel.cdc.mongodb.config.MongodbSourceOptions.DEFAULT_JSON_WRITER_SETTINGS;
 import static org.apache.seatunnel.connectors.seatunnel.cdc.mongodb.config.MongodbSourceOptions.DOCUMENT_KEY;
 import static org.apache.seatunnel.connectors.seatunnel.cdc.mongodb.config.MongodbSourceOptions.ENCODE_VALUE_FIELD;
 import static org.apache.seatunnel.connectors.seatunnel.cdc.mongodb.config.MongodbSourceOptions.FULL_DOCUMENT;
-import static org.apache.seatunnel.connectors.seatunnel.cdc.mongodb.config.MongodbSourceOptions.ID_FIELD;
+import static org.apache.seatunnel.connectors.seatunnel.cdc.mongodb.config.MongodbSourceOptions.NS_FIELD;
 import static org.apache.seatunnel.connectors.seatunnel.cdc.mongodb.utils.MongodbRecordUtils.extractBsonDocument;
 import static org.apache.seatunnel.shade.com.google.common.base.Preconditions.checkNotNull;
 
+@Slf4j
 public class MongoDBConnectorDeserializationSchema
-        implements DebeziumDeserializationSchema<SeaTunnelRow> {
+        extends AbstractDebeziumDeserializationSchema<SeaTunnelRow> {
+    private final List<CatalogTable> tables;
 
-    private final SeaTunnelDataType<SeaTunnelRow> resultTypeInfo;
+    private final Map<String, DeserializationRuntimeConverter> tableRowConverters;
 
-    private final DeserializationRuntimeConverter physicalConverter;
+    public MongoDBConnectorDeserializationSchema(List<CatalogTable> tables) {
+        this(tables, new HashMap<>());
+    }
 
     public MongoDBConnectorDeserializationSchema(
-            SeaTunnelDataType<SeaTunnelRow> physicalDataType,
-            SeaTunnelDataType<SeaTunnelRow> resultTypeInfo) {
-        this.physicalConverter = createConverter(physicalDataType);
-        this.resultTypeInfo = resultTypeInfo;
+            List<CatalogTable> tables, Map<TableId, Struct> tableIdTableChangeMap) {
+        super(tableIdTableChangeMap);
+        this.tableRowConverters = createConverter(tables);
+        this.tables = tables;
     }
 
     @Override
-    public void deserialize(@Nonnull SourceRecord record, Collector<SeaTunnelRow> out) {
+    public void deserialize(@Nonnull SourceRecord record, Collector<SeaTunnelRow> out)
+            throws Exception {
+        super.deserialize(record, out);
+
         Struct value = (Struct) record.value();
         Schema valueSchema = record.valueSchema();
 
@@ -93,33 +110,57 @@ public class MongoDBConnectorDeserializationSchema
                         Objects.requireNonNull(
                                 extractBsonDocument(value, valueSchema, DOCUMENT_KEY)));
         BsonDocument fullDocument = extractBsonDocument(value, valueSchema, FULL_DOCUMENT);
-
+        String tableId = extractTableId(record);
+        DeserializationRuntimeConverter tableRowConverter;
+        if (tableId == null && tableRowConverters.size() == 1) {
+            tableRowConverter = tableRowConverters.values().iterator().next();
+        } else {
+            tableRowConverter = tableRowConverters.get(tableId);
+        }
+        if (tableRowConverter == null) {
+            log.debug("Ignore newly added table {}", tableId);
+            return;
+        }
+        Long fetchTimestamp = SourceRecordUtils.getFetchTimestamp(record);
+        Long messageTimestamp = SourceRecordUtils.getMessageTimestamp(record);
+        long delay = -1L;
+        if (fetchTimestamp != null && messageTimestamp != null) {
+            delay = fetchTimestamp - messageTimestamp;
+        }
         switch (op) {
             case INSERT:
-                SeaTunnelRow insert = extractRowData(fullDocument);
+                SeaTunnelRow insert = extractRowData(tableRowConverter, fullDocument);
                 insert.setRowKind(RowKind.INSERT);
+                insert.setTableId(tableId);
+                MetadataUtil.setDelay(insert, delay);
+                MetadataUtil.setEventTime(insert, fetchTimestamp);
                 emit(record, insert, out);
                 break;
             case DELETE:
-                SeaTunnelRow delete =
-                        new SeaTunnelRow(
-                                new Object[] {
-                                    documentKey.get(ID_FIELD).asObjectId().getValue().toString()
-                                });
+                SeaTunnelRow delete = extractRowData(tableRowConverter, documentKey);
                 delete.setRowKind(RowKind.DELETE);
+                delete.setTableId(tableId);
+                MetadataUtil.setDelay(delete, delay);
+                MetadataUtil.setEventTime(delete, fetchTimestamp);
                 emit(record, delete, out);
                 break;
             case UPDATE:
                 if (fullDocument == null) {
                     break;
                 }
-                SeaTunnelRow updateAfter = extractRowData(fullDocument);
+                SeaTunnelRow updateAfter = extractRowData(tableRowConverter, fullDocument);
                 updateAfter.setRowKind(RowKind.UPDATE_AFTER);
+                updateAfter.setTableId(tableId);
+                MetadataUtil.setDelay(updateAfter, delay);
+                MetadataUtil.setEventTime(updateAfter, fetchTimestamp);
                 emit(record, updateAfter, out);
                 break;
             case REPLACE:
-                SeaTunnelRow replaceAfter = extractRowData(fullDocument);
+                SeaTunnelRow replaceAfter = extractRowData(tableRowConverter, fullDocument);
                 replaceAfter.setRowKind(RowKind.UPDATE_AFTER);
+                replaceAfter.setTableId(tableId);
+                MetadataUtil.setDelay(replaceAfter, delay);
+                MetadataUtil.setEventTime(replaceAfter, fetchTimestamp);
                 emit(record, replaceAfter, out);
                 break;
             case INVALIDATE:
@@ -133,8 +174,8 @@ public class MongoDBConnectorDeserializationSchema
     }
 
     @Override
-    public SeaTunnelDataType<SeaTunnelRow> getProducedType() {
-        return resultTypeInfo;
+    public List<CatalogTable> getProducedType() {
+        return tables;
     }
 
     private @Nonnull OperationType operationTypeFor(@Nonnull SourceRecord record) {
@@ -150,9 +191,23 @@ public class MongoDBConnectorDeserializationSchema
         collector.collect(physicalRow);
     }
 
-    private SeaTunnelRow extractRowData(BsonDocument document) {
+    private SeaTunnelRow extractRowData(
+            DeserializationRuntimeConverter tableRowConverter, BsonDocument document) {
         checkNotNull(document);
-        return (SeaTunnelRow) physicalConverter.convert(document);
+        return (SeaTunnelRow) tableRowConverter.convert(document);
+    }
+
+    private String extractTableId(SourceRecord record) {
+        Struct messageStruct = (Struct) record.value();
+        Struct nsStruct = (Struct) messageStruct.get(NS_FIELD);
+        String databaseName = nsStruct.getString(DB_FIELD);
+        String tableName = nsStruct.getString(COLL_FIELD);
+        return TablePath.of(databaseName, null, tableName).toString();
+    }
+
+    @VisibleForTesting
+    public String extractTableIdForTest(SourceRecord record) {
+        return extractTableId(record);
     }
 
     // -------------------------------------------------------------------------------------
@@ -164,17 +219,23 @@ public class MongoDBConnectorDeserializationSchema
         Object convert(BsonValue bsonValue);
     }
 
-    public DeserializationRuntimeConverter createConverter(SeaTunnelDataType<?> type) {
-        SerializableFunction<BsonValue, Object> internalRowConverter =
-                createNullSafeInternalConverter(type);
-        return new DeserializationRuntimeConverter() {
-            private static final long serialVersionUID = 1L;
+    public Map<String, DeserializationRuntimeConverter> createConverter(List<CatalogTable> tables) {
+        Map<String, DeserializationRuntimeConverter> tableRowConverters = new HashMap<>();
+        for (CatalogTable table : tables) {
+            SerializableFunction<BsonValue, Object> internalRowConverter =
+                    createNullSafeInternalConverter(table.getSeaTunnelRowType());
+            DeserializationRuntimeConverter itemRowConverter =
+                    new DeserializationRuntimeConverter() {
+                        private static final long serialVersionUID = 1L;
 
-            @Override
-            public Object convert(BsonValue bsonValue) {
-                return internalRowConverter.apply(bsonValue);
-            }
-        };
+                        @Override
+                        public Object convert(BsonValue bsonValue) {
+                            return internalRowConverter.apply(bsonValue);
+                        }
+                    };
+            tableRowConverters.put(table.getTablePath().toString(), itemRowConverter);
+        }
+        return tableRowConverters;
     }
 
     private static SerializableFunction<BsonValue, Object> createNullSafeInternalConverter(
@@ -190,9 +251,7 @@ public class MongoDBConnectorDeserializationSchema
             @Override
             public Object apply(BsonValue bsonValue) {
                 if (isBsonValueNull(bsonValue) || isBsonDecimalNaN(bsonValue)) {
-                    throw new MongodbConnectorException(
-                            UNSUPPORTED_OPERATION,
-                            "Unable to convert to <" + type + "> from nullable value " + bsonValue);
+                    return null;
                 }
                 return internalConverter.apply(bsonValue);
             }
@@ -284,6 +343,15 @@ public class MongoDBConnectorDeserializationSchema
                         return convertToLocalDateTime(bsonValue).toLocalDate();
                     }
                 };
+            case TIME:
+                return new SerializableFunction<BsonValue, Object>() {
+                    private static final long serialVersionUID = 1L;
+
+                    @Override
+                    public Object apply(BsonValue bsonValue) {
+                        return convertToLocalDateTime(bsonValue).toLocalTime();
+                    }
+                };
             case TIMESTAMP:
                 return new SerializableFunction<BsonValue, Object>() {
                     private static final long serialVersionUID = 1L;
@@ -323,7 +391,7 @@ public class MongoDBConnectorDeserializationSchema
     private static LocalDateTime convertToLocalDateTime(BsonValue bsonValue) {
         Instant instant;
         if (bsonValue.isTimestamp()) {
-            instant = Instant.ofEpochSecond(bsonValue.asTimestamp().getTime());
+            instant = Instant.ofEpochSecond(bsonValue.asTimestamp().getValue());
         } else if (bsonValue.isDateTime()) {
             instant = Instant.ofEpochMilli(bsonValue.asDateTime().getValue());
         } else {
@@ -462,7 +530,7 @@ public class MongoDBConnectorDeserializationSchema
     }
 
     private static double convertToDouble(@Nonnull BsonValue bsonValue) {
-        if (bsonValue.isDouble()) {
+        if (bsonValue.isNumber()) {
             return bsonValue.asNumber().doubleValue();
         }
         throw new MongodbConnectorException(
@@ -473,9 +541,20 @@ public class MongoDBConnectorDeserializationSchema
                         + bsonValue.getBsonType());
     }
 
-    private static int convertToInt(@Nonnull BsonValue bsonValue) {
+    private static int convertToInt(BsonValue bsonValue) {
         if (bsonValue.isInt32()) {
-            return bsonValue.asNumber().intValue();
+            return bsonValue.asInt32().getValue();
+        } else if (bsonValue.isNumber()) {
+            long longValue = bsonValue.asNumber().longValue();
+            if (longValue > Integer.MAX_VALUE || longValue < Integer.MIN_VALUE) {
+                throw new MongodbConnectorException(
+                        UNSUPPORTED_DATA_TYPE,
+                        "Unable to convert to integer from unexpected value '"
+                                + bsonValue
+                                + "' of type "
+                                + bsonValue.getBsonType());
+            }
+            return (int) longValue;
         }
         throw new MongodbConnectorException(
                 UNSUPPORTED_DATA_TYPE,
@@ -509,8 +588,19 @@ public class MongoDBConnectorDeserializationSchema
                 "Unsupported BYTES value type: " + bsonValue.getClass().getSimpleName());
     }
 
-    private static long convertToLong(@Nonnull BsonValue bsonValue) {
-        if (bsonValue.isInt64()) {
+    private static long convertToLong(BsonValue bsonValue) {
+        if (bsonValue.isInt64() || bsonValue.isInt32()) {
+            return bsonValue.asNumber().longValue();
+        } else if (bsonValue.isDouble()) {
+            double value = bsonValue.asNumber().doubleValue();
+            if (value > Long.MAX_VALUE || value < Long.MIN_VALUE) {
+                throw new MongodbConnectorException(
+                        UNSUPPORTED_DATA_TYPE,
+                        "Unable to convert to long from unexpected value '"
+                                + bsonValue
+                                + "' of type "
+                                + bsonValue.getBsonType());
+            }
             return bsonValue.asNumber().longValue();
         }
         throw new MongodbConnectorException(
@@ -539,5 +629,32 @@ public class MongoDBConnectorDeserializationSchema
                         + bsonValue
                         + "' of type "
                         + bsonValue.getBsonType());
+    }
+
+    @VisibleForTesting
+    public Object convertToObject(
+            @Nonnull SeaTunnelDataType<?> dataType, @Nonnull BsonValue bsonValue) {
+        switch (dataType.getSqlType()) {
+            case INT:
+                return convertToInt(bsonValue);
+            case BIGINT:
+                return convertToLong(bsonValue);
+            case DOUBLE:
+                return convertToDouble(bsonValue);
+            case STRING:
+                return convertToString(bsonValue);
+            case DATE:
+                return convertToLocalDateTime(bsonValue).toLocalDate();
+            case TIME:
+                return convertToLocalDateTime(bsonValue).toLocalTime();
+            case TIMESTAMP:
+                return convertToLocalDateTime(bsonValue);
+            case DECIMAL:
+                DecimalType decimalType = (DecimalType) dataType;
+                BigDecimal decimalValue = convertToBigDecimal(bsonValue);
+                return fromBigDecimal(
+                        decimalValue, decimalType.getPrecision(), decimalType.getScale());
+        }
+        return null;
     }
 }

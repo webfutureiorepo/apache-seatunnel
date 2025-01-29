@@ -20,6 +20,7 @@ package org.apache.seatunnel.translation.spark.source.partition.micro;
 import org.apache.seatunnel.api.source.SeaTunnelSource;
 import org.apache.seatunnel.api.source.SupportCoordinate;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
+import org.apache.seatunnel.translation.spark.execution.MultiTableManager;
 import org.apache.seatunnel.translation.spark.source.reader.SeaTunnelInputPartitionReader;
 import org.apache.seatunnel.translation.spark.source.reader.batch.ParallelBatchPartitionReader;
 import org.apache.seatunnel.translation.spark.source.reader.micro.CoordinatedMicroBatchPartitionReader;
@@ -29,33 +30,45 @@ import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.sources.v2.reader.InputPartition;
 import org.apache.spark.sql.sources.v2.reader.InputPartitionReader;
 
+import java.util.Map;
+
 public class MicroBatchPartition implements InputPartition<InternalRow> {
     protected final SeaTunnelSource<SeaTunnelRow, ?, ?> source;
     protected final Integer parallelism;
+    protected final String jobId;
     protected final Integer subtaskId;
     protected final Integer checkpointId;
     protected final Integer checkpointInterval;
     protected final String checkpointPath;
     protected final String hdfsRoot;
     protected final String hdfsUser;
+    private Map<String, String> envOptions;
+
+    protected final MultiTableManager multiTableManager;
 
     public MicroBatchPartition(
             SeaTunnelSource<SeaTunnelRow, ?, ?> source,
             Integer parallelism,
+            String jobId,
             Integer subtaskId,
             Integer checkpointId,
             Integer checkpointInterval,
             String checkpointPath,
             String hdfsRoot,
-            String hdfsUser) {
+            String hdfsUser,
+            Map<String, String> envOptions,
+            MultiTableManager multiTableManager) {
         this.source = source;
         this.parallelism = parallelism;
+        this.jobId = jobId;
         this.subtaskId = subtaskId;
         this.checkpointId = checkpointId;
         this.checkpointInterval = checkpointInterval;
         this.checkpointPath = checkpointPath;
         this.hdfsRoot = hdfsRoot;
         this.hdfsUser = hdfsUser;
+        this.envOptions = envOptions;
+        this.multiTableManager = multiTableManager;
     }
 
     @Override
@@ -66,23 +79,29 @@ public class MicroBatchPartition implements InputPartition<InternalRow> {
                     new CoordinatedMicroBatchPartitionReader(
                             source,
                             parallelism,
+                            jobId,
                             subtaskId,
                             checkpointId,
                             checkpointInterval,
                             checkpointPath,
                             hdfsRoot,
-                            hdfsUser);
+                            hdfsUser,
+                            envOptions,
+                            multiTableManager);
         } else {
             partitionReader =
                     new ParallelMicroBatchPartitionReader(
                             source,
                             parallelism,
+                            jobId,
                             subtaskId,
                             checkpointId,
                             checkpointInterval,
                             checkpointPath,
                             hdfsRoot,
-                            hdfsUser);
+                            hdfsUser,
+                            envOptions,
+                            multiTableManager);
         }
         return new SeaTunnelInputPartitionReader(partitionReader);
     }

@@ -55,18 +55,30 @@ public class UniqueDatabase {
 
     private final MySqlContainer container;
     private final String databaseName;
-    private final String templateName;
+    private String templateName;
     private final String username;
     private final String password;
 
+    /**
+     * @param container mysql docker container
+     * @param databaseName name of the database
+     * @param username Connection user name
+     * @param password Connection password
+     * @param templateName Execute ddl/ directory file name
+     */
     public UniqueDatabase(
-            MySqlContainer container, String databaseName, String username, String password) {
+            MySqlContainer container,
+            String databaseName,
+            String username,
+            String password,
+            String templateName) {
         this(
                 container,
                 databaseName,
                 Integer.toUnsignedString(new Random().nextInt(), 36),
                 username,
-                password);
+                password,
+                (!templateName.isEmpty() && templateName != null) ? templateName : password);
     }
 
     private UniqueDatabase(
@@ -74,10 +86,11 @@ public class UniqueDatabase {
             String databaseName,
             final String identifier,
             String username,
-            String password) {
+            String password,
+            String templateName) {
         this.container = container;
         this.databaseName = databaseName + "_" + identifier;
-        this.templateName = databaseName;
+        this.templateName = templateName;
         this.username = username;
         this.password = password;
     }
@@ -108,6 +121,11 @@ public class UniqueDatabase {
 
     public String getPassword() {
         return password;
+    }
+
+    public UniqueDatabase setTemplateName(String templateName) {
+        this.templateName = templateName;
+        return this;
     }
 
     /** @return Fully qualified table name <code>&lt;databaseName&gt;.&lt;tableName&gt;</code> */

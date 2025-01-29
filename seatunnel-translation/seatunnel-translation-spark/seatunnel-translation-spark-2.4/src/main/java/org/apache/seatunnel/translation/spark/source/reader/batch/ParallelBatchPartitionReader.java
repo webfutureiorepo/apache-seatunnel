@@ -23,6 +23,7 @@ import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.common.Handover;
 import org.apache.seatunnel.translation.source.BaseSourceFunction;
 import org.apache.seatunnel.translation.source.ParallelSource;
+import org.apache.seatunnel.translation.spark.execution.MultiTableManager;
 import org.apache.seatunnel.translation.spark.serialization.InternalRowCollector;
 import org.apache.seatunnel.translation.util.ThreadPoolExecutorFactory;
 
@@ -43,6 +44,7 @@ public class ParallelBatchPartitionReader {
 
     protected final SeaTunnelSource<SeaTunnelRow, ?, ?> source;
     protected final Integer parallelism;
+    protected final String jobId;
     protected final Integer subtaskId;
 
     protected final ExecutorService executorService;
@@ -55,23 +57,34 @@ public class ParallelBatchPartitionReader {
 
     protected volatile BaseSourceFunction<SeaTunnelRow> internalSource;
     protected volatile InternalRowCollector internalRowCollector;
+    private Map<String, String> envOptions;
+
+    protected final MultiTableManager multiTableManager;
 
     public ParallelBatchPartitionReader(
-            SeaTunnelSource<SeaTunnelRow, ?, ?> source, Integer parallelism, Integer subtaskId) {
+            SeaTunnelSource<SeaTunnelRow, ?, ?> source,
+            Integer parallelism,
+            String jobId,
+            Integer subtaskId,
+            Map<String, String> envOptions,
+            MultiTableManager multiTableManager) {
         this.source = source;
         this.parallelism = parallelism;
+        this.jobId = jobId;
         this.subtaskId = subtaskId;
         this.executorService =
                 ThreadPoolExecutorFactory.createScheduledThreadPoolExecutor(
                         1, getEnumeratorThreadName());
         this.handover = new Handover<>();
+        this.envOptions = envOptions;
+        this.multiTableManager = multiTableManager;
     }
 
     protected String getEnumeratorThreadName() {
         return String.format("parallel-split-enumerator-executor-%s", subtaskId);
     }
 
-    public boolean next() throws IOException {
+    public boolean next() throws Exception {
         prepare();
         while (running && handover.isEmpty()) {
             try {
@@ -97,7 +110,8 @@ public class ParallelBatchPartitionReader {
         }
 
         this.internalRowCollector =
-                new InternalRowCollector(handover, checkpointLock, source.getProducedType());
+                multiTableManager.getInternalRowCollector(handover, checkpointLock, envOptions);
+
         executorService.execute(
                 () -> {
                     try {
@@ -112,7 +126,7 @@ public class ParallelBatchPartitionReader {
     }
 
     protected BaseSourceFunction<SeaTunnelRow> createInternalSource() {
-        return new InternalParallelSource<>(source, null, parallelism, subtaskId);
+        return new InternalParallelSource<>(source, null, parallelism, jobId, subtaskId);
     }
 
     public InternalRow get() {
@@ -142,8 +156,9 @@ public class ParallelBatchPartitionReader {
                 SeaTunnelSource<SeaTunnelRow, SplitT, StateT> source,
                 Map<Integer, List<byte[]>> restoredState,
                 int parallelism,
+                String jobId,
                 int subtaskId) {
-            super(source, restoredState, parallelism, subtaskId);
+            super(source, restoredState, parallelism, jobId, subtaskId);
         }
 
         @Override

@@ -33,8 +33,8 @@ Read external data source data through JDBC.
 
 ## Database Dependency
 
-> Please download the support list corresponding to 'Maven' and copy it to the '$SEATNUNNEL_HOME/plugins/jdbc/lib/' working directory<br/>
-> For example: cp kingbase8-8.6.0.jar $SEATNUNNEL_HOME/plugins/jdbc/lib/
+> Please download the support list corresponding to 'Maven' and copy it to the '$SEATUNNEL_HOME/plugins/jdbc/lib/' working directory<br/>
+> For example: cp kingbase8-8.6.0.jar $SEATUNNEL_HOME/plugins/jdbc/lib/
 
 ## Data Type Mapping
 
@@ -68,7 +68,7 @@ Read external data source data through JDBC.
 | partition_upper_bound        | BigDecimal | No       | -               | The partition_column max value for scan, if not set SeaTunnel will query database get max value.                                                                                                                                                                      |
 | partition_num                | Int        | No       | job parallelism | The number of partition count, only support positive integer. Default value is job parallelism.                                                                                                                                                                       |
 | fetch_size                   | Int        | No       | 0               | For queries that return a large number of objects, you can configure <br/> the row fetch size used in the query to improve performance by <br/> reducing the number database hits required to satisfy the selection criteria.<br/> Zero means use jdbc default value. |
-| common-options               |            | No       | -               | Source plugin common parameters, please refer to [Source Common Options](common-options.md) for details                                                                                                                                                               |
+| common-options               |            | No       | -               | Source plugin common parameters, please refer to [Source Common Options](../source-common-options.md) for details                                                                                                                                                     |
 
 ### Tips
 
@@ -80,7 +80,7 @@ Read external data source data through JDBC.
 
 ```
 env {
-  execution.parallelism = 2
+  parallelism = 2
   job.mode = "BATCH"
 }
 

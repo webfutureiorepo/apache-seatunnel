@@ -70,7 +70,9 @@ public class ReadonlyConfig implements Serializable {
      * Transform to Config todo: This method should be removed after we remove Config
      *
      * @return Config
+     * @deprecated Please use ReadonlyConfig directly
      */
+    @Deprecated
     public Config toConfig() {
         return ConfigFactory.parseMap(confData);
     }
@@ -94,6 +96,10 @@ public class ReadonlyConfig implements Serializable {
         }
     }
 
+    public Map<String, Object> getSourceMap() {
+        return confData;
+    }
+
     public <T> Optional<T> getOptional(Option<T> option) {
         if (option == null) {
             throw new NullPointerException("Option not be null.");
@@ -103,10 +109,10 @@ public class ReadonlyConfig implements Serializable {
             for (String fallbackKey : option.getFallbackKeys()) {
                 value = getValue(fallbackKey);
                 if (value != null) {
-                    log.info(
-                            "Config uses fallback configuration key '{}' instead of key '{}'",
-                            fallbackKey,
-                            option.key());
+                    log.warn(
+                            "Please use the new key '{}' instead of the deprecated key '{}'.",
+                            option.key(),
+                            fallbackKey);
                     break;
                 }
             }

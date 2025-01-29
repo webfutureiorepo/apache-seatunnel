@@ -27,8 +27,12 @@ import org.apache.seatunnel.api.table.factory.CatalogFactory;
 import org.apache.seatunnel.api.table.factory.Factory;
 import org.apache.seatunnel.common.utils.JdbcUrlUtil;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.JdbcCatalogOptions;
+import org.apache.seatunnel.connectors.seatunnel.jdbc.internal.dialect.DatabaseIdentifier;
 
 import org.apache.commons.lang3.StringUtils;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.google.auto.service.AutoService;
 
@@ -37,11 +41,11 @@ import java.util.Optional;
 @AutoService(Factory.class)
 public class OceanBaseCatalogFactory implements CatalogFactory {
 
-    public static final String IDENTIFIER = "OceanBase";
+    private static final Logger log = LoggerFactory.getLogger(OceanBaseCatalogFactory.class);
 
     @Override
     public String factoryIdentifier() {
-        return IDENTIFIER;
+        return DatabaseIdentifier.OCENABASE;
     }
 
     @Override

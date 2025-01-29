@@ -302,6 +302,14 @@ Example:
 
 REPLACE(NAME, ' ')
 
+### SPLIT
+
+Split a string into an array.
+
+Example:
+
+select SPLIT(test,';') as arrays
+
 ### SOUNDEX
 
 ```SOUNDEX(string)```
@@ -795,6 +803,15 @@ Example:
 
 MONTHNAME(CREATED)
 
+### IS_DATE
+
+```IS_DATE(string, formatString)```
+Parses a string and returns a boolean value. The most important format characters are: y year, M month, d day, H hour, m minute, s second. For details of the format, see java.time.format.DateTimeFormatter.
+
+Example:
+
+CALL IS_DATE('2021-04-08 13:34:45','yyyy-MM-dd HH:mm:ss')
+
 ### PARSEDATETIME / TO_DATE
 
 ```PARSEDATETIME | TO_DATE(string, formatString)```
@@ -848,6 +865,30 @@ Example:
 
 YEAR(CREATED)
 
+### FROM_UNIXTIME
+
+```FROM_UNIXTIME (unixtime, formatString,timeZone)```
+
+Convert the number of seconds from the UNIX epoch (1970-01-01 00:00:00 UTC) to a string representing the timestamp of that moment.
+
+The most important format characters are: y year, M month, d day, H hour, m minute, s second. For details of the format, see `java.time.format.DateTimeFormatter`.
+
+`timeZone` is optional, default value is system's time zone.  `timezone` value can be a `UTC+ timezone offset`, for example, `UTC+8` represents the Asia/Shanghai time zone, see `java.time.ZoneId`
+
+This method returns a string.
+
+Example:
+
+// use default zone
+
+CALL FROM_UNIXTIME(1672502400, 'yyyy-MM-dd HH:mm:ss')
+
+or
+
+// use given zone
+
+CALL FROM_UNIXTIME(1672502400, 'yyyy-MM-dd HH:mm:ss','UTC+6')
+
 ## System Functions
 
 ### CAST
@@ -856,7 +897,7 @@ YEAR(CREATED)
 
 Converts a value to another data type.
 
-Supported data types: STRING | VARCHAR, INT | INTEGER, LONG | BIGINT, BYTE, FLOAT, DOUBLE, DECIMAL(p,s), TIMESTAMP, DATE, TIME
+Supported data types: STRING | VARCHAR, INT | INTEGER, LONG | BIGINT, BYTE, FLOAT, DOUBLE, DECIMAL(p,s), TIMESTAMP, DATE, TIME, BYTES
 
 Example:
 
@@ -891,3 +932,90 @@ Returns NULL if 'a' is equal to 'b', otherwise 'a'.
 Example:
 
 NULLIF(A, B)
+
+### CASE WHEN
+
+```
+select
+  case
+    when c_string in ('c_string') then 1
+    else 0
+  end as c_string_1,
+  case
+    when c_string not in ('c_string') then 1
+    else 0
+  end as c_string_0,
+  case
+    when c_tinyint = 117
+    and TO_CHAR(c_boolean) = 'true' then 1
+    else 0
+  end as c_tinyint_boolean_1,
+  case
+    when c_tinyint != 117
+    and TO_CHAR(c_boolean) = 'true' then 1
+    else 0
+  end as c_tinyint_boolean_0,
+  case
+    when c_tinyint != 117
+    or TO_CHAR(c_boolean) = 'true' then 1
+    else 0
+  end as c_tinyint_boolean_or_1,
+  case
+    when c_int > 1
+    and c_bigint > 1
+    and c_float > 1
+    and c_double > 1
+    and c_decimal > 1 then 1
+    else 0
+  end as c_number_1,
+  case
+    when c_tinyint <> 117 then 1
+    else 0
+  end as c_number_0
+from
+  dual
+```
+
+It is used to determine whether the condition is valid and return different values according to different judgments
+
+Example:
+
+case when c_string in ('c_string') then 1 else 0 end
+
+### UUID
+
+```UUID()```
+
+Generate a uuid through java function.
+
+Example:
+
+select UUID() as seatunnel_uuid
+
+### ARRAY
+
+```ARRAY<T> array(T, ...)```
+Create an array consisting of variadic elements and return it. Here, T can be either “column” or “literal”.
+
+Example:
+
+select ARRAY(1,2,3) as arrays
+select ARRAY('c_1',2,3.12) as arrays
+select ARRAY(column1,column2,column3) as arrays
+
+notes: Currently only string, double, long, int types are supported
+
+### LATERAL VIEW 
+#### EXPLODE
+
+explode array column to rows.
+OUTER EXPLODE will return NULL, while array is NULL or empty
+EXPLODE(SPLIT(FIELD_NAME,separator))Used to split string type. The first parameter of SPLIT function  is the field name, the second parameter is the separator
+EXPLODE(ARRAY(value1,value2)) Used to custom array type.
+```
+SELECT * FROM dual 
+	LATERAL VIEW EXPLODE ( SPLIT ( NAME, ',' ) ) AS NAME 
+	LATERAL VIEW EXPLODE ( SPLIT ( pk_id, ';' ) ) AS pk_id 
+	LATERAL VIEW OUTER EXPLODE ( age ) AS age
+	LATERAL VIEW OUTER EXPLODE ( ARRAY(1,1) ) AS num
+```

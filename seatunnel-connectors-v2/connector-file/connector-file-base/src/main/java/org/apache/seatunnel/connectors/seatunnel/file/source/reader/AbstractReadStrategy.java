@@ -19,22 +19,30 @@ package org.apache.seatunnel.connectors.seatunnel.file.source.reader;
 
 import org.apache.seatunnel.shade.com.typesafe.config.Config;
 
+import org.apache.seatunnel.api.source.Collector;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
 import org.apache.seatunnel.api.table.type.BasicType;
 import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
+import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
-import org.apache.seatunnel.connectors.seatunnel.file.config.BaseSourceConfig;
+import org.apache.seatunnel.connectors.seatunnel.file.config.ArchiveCompressFormat;
+import org.apache.seatunnel.connectors.seatunnel.file.config.BaseSourceConfigOptions;
+import org.apache.seatunnel.connectors.seatunnel.file.config.FileFormat;
 import org.apache.seatunnel.connectors.seatunnel.file.config.HadoopConf;
-import org.apache.seatunnel.connectors.seatunnel.file.sink.util.FileSystemUtils;
+import org.apache.seatunnel.connectors.seatunnel.file.hadoop.HadoopFileSystemProxy;
 
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.CommonConfigurationKeys;
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
+import org.apache.commons.compress.compressors.gzip.GzipParameters;
 import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
 
 import lombok.extern.slf4j.Slf4j;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -46,11 +54,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
-import static org.apache.parquet.avro.AvroReadSupport.READ_INT96_AS_FIXED;
-import static org.apache.parquet.avro.AvroSchemaConverter.ADD_LIST_ELEMENT_RECORDS;
-import static org.apache.parquet.avro.AvroWriteSupport.WRITE_FIXED_AS_INT96;
-import static org.apache.parquet.avro.AvroWriteSupport.WRITE_OLD_LIST_STRUCTURE;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 @Slf4j
 public abstract class AbstractReadStrategy implements ReadStrategy {
@@ -74,45 +79,25 @@ public abstract class AbstractReadStrategy implements ReadStrategy {
     protected List<String> readPartitions = new ArrayList<>();
     protected List<String> readColumns = new ArrayList<>();
     protected boolean isMergePartition = true;
-    protected long skipHeaderNumber = BaseSourceConfig.SKIP_HEADER_ROW_NUMBER.defaultValue();
+    protected long skipHeaderNumber = BaseSourceConfigOptions.SKIP_HEADER_ROW_NUMBER.defaultValue();
     protected transient boolean isKerberosAuthorization = false;
+    protected HadoopFileSystemProxy hadoopFileSystemProxy;
+    protected ArchiveCompressFormat archiveCompressFormat =
+            BaseSourceConfigOptions.ARCHIVE_COMPRESS_CODEC.defaultValue();
 
     protected Pattern pattern;
 
     @Override
     public void init(HadoopConf conf) {
         this.hadoopConf = conf;
+        this.hadoopFileSystemProxy = new HadoopFileSystemProxy(hadoopConf);
     }
 
     @Override
-    public void setSeaTunnelRowTypeInfo(SeaTunnelRowType seaTunnelRowType) {
-        this.seaTunnelRowType = seaTunnelRowType;
+    public void setCatalogTable(CatalogTable catalogTable) {
+        this.seaTunnelRowType = catalogTable.getSeaTunnelRowType();
         this.seaTunnelRowTypeWithPartition =
-                mergePartitionTypes(fileNames.get(0), seaTunnelRowType);
-    }
-
-    @Override
-    public Configuration getConfiguration(HadoopConf hadoopConf) {
-        Configuration configuration = new Configuration();
-        configuration.setBoolean(READ_INT96_AS_FIXED, true);
-        configuration.setBoolean(WRITE_FIXED_AS_INT96, true);
-        configuration.setBoolean(ADD_LIST_ELEMENT_RECORDS, false);
-        configuration.setBoolean(WRITE_OLD_LIST_STRUCTURE, true);
-        configuration.set(CommonConfigurationKeys.FS_DEFAULT_NAME_KEY, hadoopConf.getHdfsNameKey());
-        configuration.set(
-                String.format("fs.%s.impl", hadoopConf.getSchema()), hadoopConf.getFsHdfsImpl());
-        hadoopConf.setExtraOptionsForConfiguration(configuration);
-        String principal = hadoopConf.getKerberosPrincipal();
-        String keytabPath = hadoopConf.getKerberosKeytabPath();
-        if (!isKerberosAuthorization) {
-            FileSystemUtils.doKerberosAuthentication(configuration, principal, keytabPath);
-            isKerberosAuthorization = true;
-        }
-        return configuration;
-    }
-
-    Configuration getConfiguration() {
-        return getConfiguration(hadoopConf);
+                mergePartitionTypes(fileNames.get(0), catalogTable.getSeaTunnelRowType());
     }
 
     boolean checkFileType(String path) {
@@ -120,18 +105,18 @@ public abstract class AbstractReadStrategy implements ReadStrategy {
     }
 
     @Override
-    public List<String> getFileNamesByPath(HadoopConf hadoopConf, String path) throws IOException {
-        Configuration configuration = getConfiguration(hadoopConf);
-        FileSystem hdfs = FileSystem.get(configuration);
+    public List<String> getFileNamesByPath(String path) throws IOException {
         ArrayList<String> fileNames = new ArrayList<>();
-        Path listFiles = new Path(path);
-        FileStatus[] stats = hdfs.listStatus(listFiles);
+        FileStatus[] stats = hadoopFileSystemProxy.listStatus(path);
         for (FileStatus fileStatus : stats) {
             if (fileStatus.isDirectory()) {
-                fileNames.addAll(getFileNamesByPath(hadoopConf, fileStatus.getPath().toString()));
+                // skip hidden tmp directory, such as .hive-staging_hive
+                if (!fileStatus.getPath().getName().startsWith(".")) {
+                    fileNames.addAll(getFileNamesByPath(fileStatus.getPath().toString()));
+                }
                 continue;
             }
-            if (fileStatus.isFile() && filterFileByPattern(fileStatus)) {
+            if (fileStatus.isFile() && filterFileByPattern(fileStatus) && fileStatus.getLen() > 0) {
                 // filter '_SUCCESS' file
                 if (!fileStatus.getPath().getName().equals("_SUCCESS")
                         && !fileStatus.getPath().getName().startsWith(".")) {
@@ -158,23 +143,33 @@ public abstract class AbstractReadStrategy implements ReadStrategy {
     @Override
     public void setPluginConfig(Config pluginConfig) {
         this.pluginConfig = pluginConfig;
-        if (pluginConfig.hasPath(BaseSourceConfig.PARSE_PARTITION_FROM_PATH.key())) {
+        // Determine whether it is a compressed file
+        if (pluginConfig.hasPath(BaseSourceConfigOptions.ARCHIVE_COMPRESS_CODEC.key())) {
+            String archiveCompressCodec =
+                    pluginConfig.getString(BaseSourceConfigOptions.ARCHIVE_COMPRESS_CODEC.key());
+            archiveCompressFormat =
+                    ArchiveCompressFormat.valueOf(archiveCompressCodec.toUpperCase());
+        }
+        if (pluginConfig.hasPath(BaseSourceConfigOptions.PARSE_PARTITION_FROM_PATH.key())) {
             isMergePartition =
-                    pluginConfig.getBoolean(BaseSourceConfig.PARSE_PARTITION_FROM_PATH.key());
+                    pluginConfig.getBoolean(
+                            BaseSourceConfigOptions.PARSE_PARTITION_FROM_PATH.key());
         }
-        if (pluginConfig.hasPath(BaseSourceConfig.SKIP_HEADER_ROW_NUMBER.key())) {
-            skipHeaderNumber = pluginConfig.getLong(BaseSourceConfig.SKIP_HEADER_ROW_NUMBER.key());
+        if (pluginConfig.hasPath(BaseSourceConfigOptions.SKIP_HEADER_ROW_NUMBER.key())) {
+            skipHeaderNumber =
+                    pluginConfig.getLong(BaseSourceConfigOptions.SKIP_HEADER_ROW_NUMBER.key());
         }
-        if (pluginConfig.hasPath(BaseSourceConfig.READ_PARTITIONS.key())) {
+        if (pluginConfig.hasPath(BaseSourceConfigOptions.READ_PARTITIONS.key())) {
             readPartitions.addAll(
-                    pluginConfig.getStringList(BaseSourceConfig.READ_PARTITIONS.key()));
+                    pluginConfig.getStringList(BaseSourceConfigOptions.READ_PARTITIONS.key()));
         }
-        if (pluginConfig.hasPath(BaseSourceConfig.READ_COLUMNS.key())) {
-            readColumns.addAll(pluginConfig.getStringList(BaseSourceConfig.READ_COLUMNS.key()));
+        if (pluginConfig.hasPath(BaseSourceConfigOptions.READ_COLUMNS.key())) {
+            readColumns.addAll(
+                    pluginConfig.getStringList(BaseSourceConfigOptions.READ_COLUMNS.key()));
         }
-        if (pluginConfig.hasPath(BaseSourceConfig.FILE_FILTER_PATTERN.key())) {
+        if (pluginConfig.hasPath(BaseSourceConfigOptions.FILE_FILTER_PATTERN.key())) {
             String filterPattern =
-                    pluginConfig.getString(BaseSourceConfig.FILE_FILTER_PATTERN.key());
+                    pluginConfig.getString(BaseSourceConfigOptions.FILE_FILTER_PATTERN.key());
             this.pattern = Pattern.compile(Matcher.quoteReplacement(filterPattern));
         }
     }
@@ -182,6 +177,126 @@ public abstract class AbstractReadStrategy implements ReadStrategy {
     @Override
     public SeaTunnelRowType getActualSeaTunnelRowTypeInfo() {
         return isMergePartition ? seaTunnelRowTypeWithPartition : seaTunnelRowType;
+    }
+
+    protected void resolveArchiveCompressedInputStream(
+            String path,
+            String tableId,
+            Collector<SeaTunnelRow> output,
+            Map<String, String> partitionsMap,
+            FileFormat fileFormat)
+            throws IOException {
+        switch (archiveCompressFormat) {
+            case ZIP:
+                try (ZipInputStream zis =
+                        new ZipInputStream(hadoopFileSystemProxy.getInputStream(path))) {
+                    ZipEntry entry;
+                    while ((entry = zis.getNextEntry()) != null) {
+                        if (!entry.isDirectory() && checkFileType(entry.getName(), fileFormat)) {
+                            readProcess(
+                                    path,
+                                    tableId,
+                                    output,
+                                    copyInputStream(zis),
+                                    partitionsMap,
+                                    entry.getName());
+                        }
+                        zis.closeEntry();
+                    }
+                }
+                break;
+            case TAR:
+                try (TarArchiveInputStream tarInput =
+                        new TarArchiveInputStream(hadoopFileSystemProxy.getInputStream(path))) {
+                    TarArchiveEntry entry;
+                    while ((entry = tarInput.getNextTarEntry()) != null) {
+                        if (!entry.isDirectory() && checkFileType(entry.getName(), fileFormat)) {
+                            readProcess(
+                                    path,
+                                    tableId,
+                                    output,
+                                    copyInputStream(tarInput),
+                                    partitionsMap,
+                                    entry.getName());
+                        }
+                    }
+                }
+                break;
+            case TAR_GZ:
+                try (GzipCompressorInputStream gzipIn =
+                                new GzipCompressorInputStream(
+                                        hadoopFileSystemProxy.getInputStream(path));
+                        TarArchiveInputStream tarIn = new TarArchiveInputStream(gzipIn)) {
+
+                    TarArchiveEntry entry;
+                    while ((entry = tarIn.getNextTarEntry()) != null) {
+                        if (!entry.isDirectory() && checkFileType(entry.getName(), fileFormat)) {
+                            readProcess(
+                                    path,
+                                    tableId,
+                                    output,
+                                    copyInputStream(tarIn),
+                                    partitionsMap,
+                                    entry.getName());
+                        }
+                    }
+                }
+                break;
+            case GZ:
+                GzipCompressorInputStream gzipIn =
+                        new GzipCompressorInputStream(hadoopFileSystemProxy.getInputStream(path));
+                GzipParameters parameters = gzipIn.getMetaData();
+                String fileName = parameters.getFilename();
+                if (fileName == null) {
+                    // remove file suffix
+                    // eg: excel need full compressed name
+                    if (fileFormat == FileFormat.EXCEL) {
+                        if (path.endsWith(".gz")) {
+                            fileName = path.substring(0, path.length() - 3);
+                        } else {
+                            throw new IllegalArgumentException(
+                                    "Excel file must have a .gz extension. File: " + path);
+                        }
+                    } else {
+                        fileName = path;
+                    }
+                }
+                readProcess(
+                        path, tableId, output, copyInputStream(gzipIn), partitionsMap, fileName);
+                break;
+            case NONE:
+                readProcess(
+                        path,
+                        tableId,
+                        output,
+                        hadoopFileSystemProxy.getInputStream(path),
+                        partitionsMap,
+                        path);
+                break;
+            default:
+                log.warn(
+                        "The file does not support this archive compress type: {}",
+                        archiveCompressFormat);
+                readProcess(
+                        path,
+                        tableId,
+                        output,
+                        hadoopFileSystemProxy.getInputStream(path),
+                        partitionsMap,
+                        path);
+        }
+    }
+
+    protected void readProcess(
+            String path,
+            String tableId,
+            Collector<SeaTunnelRow> output,
+            InputStream inputStream,
+            Map<String, String> partitionsMap,
+            String currentFileName)
+            throws IOException {
+        throw new UnsupportedOperationException(
+                "The file does not support the compressed file reading");
     }
 
     protected Map<String, String> parsePartitionsByPath(String path) {
@@ -231,5 +346,40 @@ public abstract class AbstractReadStrategy implements ReadStrategy {
             return pattern.matcher(fileStatus.getPath().getName()).matches();
         }
         return true;
+    }
+
+    protected static InputStream copyInputStream(InputStream inputStream) throws IOException {
+        ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+        byte[] buffer = new byte[1024];
+        int bytesRead;
+
+        while ((bytesRead = inputStream.read(buffer)) != -1) {
+            byteArrayOutputStream.write(buffer, 0, bytesRead);
+        }
+
+        return new ByteArrayInputStream(byteArrayOutputStream.toByteArray());
+    }
+
+    protected boolean checkFileType(String fileName, FileFormat fileFormat) {
+        for (String suffix : fileFormat.getAllSuffix()) {
+            if (fileName.endsWith(suffix)) {
+                return true;
+            }
+        }
+
+        log.warn(
+                "The {} file format is incorrect. Please check the format in the compressed file.",
+                fileName);
+        return false;
+    }
+
+    @Override
+    public void close() throws IOException {
+        try {
+            if (hadoopFileSystemProxy != null) {
+                hadoopFileSystemProxy.close();
+            }
+        } catch (Exception ignore) {
+        }
     }
 }

@@ -18,6 +18,8 @@
 
 package org.apache.seatunnel.connectors.seatunnel.jdbc;
 
+import org.apache.seatunnel.shade.com.google.common.collect.Lists;
+
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.common.exception.SeaTunnelRuntimeException;
 
@@ -27,9 +29,6 @@ import org.testcontainers.containers.Db2Container;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
 import org.testcontainers.utility.DockerLoggerFactory;
-
-import com.google.common.collect.Lists;
-import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
 import java.sql.Date;
@@ -41,14 +40,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-@Slf4j
 public class JdbcDb2IT extends AbstractJdbcIT {
 
     private static final String DB2_CONTAINER_HOST = "db2-e2e";
 
-    private static final String DB2_DATABASE = "E2E";
-    private static final String DB2_SOURCE = "SOURCE";
-    private static final String DB2_SINK = "SINK";
+    protected static final String DB2_DATABASE = "E2E";
+    protected static final String DB2_SOURCE = "SOURCE";
+    protected static final String DB2_SINK = "SINK";
 
     private static final String DB2_URL = "jdbc:db2://" + HOST + ":%s/%s";
 
@@ -118,9 +116,6 @@ public class JdbcDb2IT extends AbstractJdbcIT {
                 .testData(testDataSet)
                 .build();
     }
-
-    @Override
-    void compareResult() {}
 
     @Override
     String driverUrl() {
@@ -205,7 +200,9 @@ public class JdbcDb2IT extends AbstractJdbcIT {
     @Override
     public void clearTable(String schema, String table) {
         try (Statement statement = connection.createStatement()) {
-            String truncate = String.format("delete from \"%s\".%s where 1=1;", schema, table);
+            String truncate =
+                    String.format(
+                            "delete from %s where 1=1;", buildTableInfoWithSchema(schema, table));
             statement.execute(truncate);
             connection.commit();
         } catch (SQLException e) {

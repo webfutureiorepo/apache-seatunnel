@@ -18,17 +18,17 @@ Used to send data to Console. Both support streaming and batch mode.
 
 > For example, if the data from upstream is [`age: 12, name: jared`], the content send to console is the following: `{"name":"jared","age":17}`
 
-## Key features
+## Key Features
 
 - [ ] [exactly-once](../../concept/connector-v2-features.md)
 
 ## Options
 
-|        Name        |  Type   | Required | Default |                                             Description                                             |
-|--------------------|---------|----------|---------|-----------------------------------------------------------------------------------------------------|
-| common-options     |         | No       | -       | Sink plugin common parameters, please refer to [Sink Common Options](common-options.md) for details |
-| log.print.data     | boolean | No       | -       | Flag to determine whether data should be printed in the logs. The default value is `true`           |
-| log.print.delay.ms | int     | No       | -       | Delay in milliseconds between printing each data item to the logs. The default value is `0`.        |
+|        Name        |  Type   | Required | Default |                                                 Description                                                 |
+|--------------------|---------|----------|---------|-------------------------------------------------------------------------------------------------------------|
+| common-options     |         | No       | -       | Sink plugin common parameters, please refer to [Sink Common Options](../sink-common-options.md) for details |
+| log.print.data     | boolean | No       | -       | Flag to determine whether data should be printed in the logs. The default value is `true`                   |
+| log.print.delay.ms | int     | No       | -       | Delay in milliseconds between printing each data item to the logs. The default value is `0`.                |
 
 ## Task Example
 
@@ -38,13 +38,13 @@ Used to send data to Console. Both support streaming and batch mode.
 
 ```
 env {
-  execution.parallelism = 1
+  parallelism = 1
   job.mode = "STREAMING"
 }
 
 source {
   FakeSource {
-    result_table_name = "fake"
+    plugin_output = "fake"
     schema = {
       fields {
         name = "string"
@@ -56,7 +56,7 @@ source {
 
 sink {
   Console {
-    source_table_name = "fake"
+    plugin_input = "fake"
   }
 }
 ```
@@ -67,13 +67,13 @@ sink {
 
 ```
 env {
-  execution.parallelism = 1
+  parallelism = 1
   job.mode = "STREAMING"
 }
 
 source {
   FakeSource {
-    result_table_name = "fake1"
+    plugin_output = "fake1"
     schema = {
       fields {
         id = "int"
@@ -84,7 +84,7 @@ source {
     }
   }
    FakeSource {
-    result_table_name = "fake2"
+    plugin_output = "fake2"
     schema = {
       fields {
         name = "string"
@@ -96,10 +96,10 @@ source {
 
 sink {
   Console {
-    source_table_name = "fake1"
+    plugin_input = "fake1"
   }
   Console {
-    source_table_name = "fake2"
+    plugin_input = "fake2"
   }
 }
 ```

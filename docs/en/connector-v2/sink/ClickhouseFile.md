@@ -20,7 +20,7 @@ Write data to Clickhouse can also be done using JDBC
 
 ## Options
 
-|          name          |  type   | required |             default value              |
+|          Name          |  Type   | Required |                Default                 |
 |------------------------|---------|----------|----------------------------------------|
 | host                   | string  | yes      | -                                      |
 | database               | string  | yes      | -                                      |
@@ -38,6 +38,7 @@ Write data to Clickhouse can also be done using JDBC
 | compatible_mode        | boolean | no       | false                                  |
 | file_fields_delimiter  | string  | no       | "\t"                                   |
 | file_temp_path         | string  | no       | "/tmp/seatunnel/clickhouse-local/file" |
+| key_path               | string  | no       | "/tmp/id_rsa"                          |
 | common-options         |         | no       | -                                      |
 
 ### host [string]
@@ -111,9 +112,13 @@ Avoid this with this configuration. Value string has to be an exactly one charac
 
 The directory where ClickhouseFile stores temporary files locally.
 
+### key_path [string]
+
+The path of the private key file used for scp or rsync to connect to the ClickHouse server.
+
 ### common options
 
-Sink plugin common parameters, please refer to [Sink Common Options](common-options.md) for details
+Sink plugin common parameters, please refer to [Sink Common Options](../sink-common-options.md) for details
 
 ## Examples
 

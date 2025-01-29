@@ -17,14 +17,16 @@
 
 package org.apache.seatunnel.connectors.seatunnel.jdbc.internal.executor;
 
+import org.apache.seatunnel.api.table.catalog.TableSchema;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
-import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
-import org.apache.seatunnel.common.exception.CommonErrorCode;
+import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.exception.JdbcConnectorException;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.internal.converter.JdbcRowConverter;
 
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
+
+import javax.annotation.Nullable;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -39,9 +41,10 @@ public class InsertOrUpdateBatchStatementExecutor
     private final StatementFactory existStmtFactory;
     @NonNull private final StatementFactory insertStmtFactory;
     @NonNull private final StatementFactory updateStmtFactory;
-    private final SeaTunnelRowType keyRowType;
+    private final TableSchema keyTableSchema;
     private final Function<SeaTunnelRow, SeaTunnelRow> keyExtractor;
-    @NonNull private final SeaTunnelRowType valueRowType;
+    @NonNull private final TableSchema valueTableSchema;
+    @Nullable private final TableSchema databaseTableSchema;
     @NonNull private final JdbcRowConverter rowConverter;
     private transient PreparedStatement existStatement;
     private transient PreparedStatement insertStatement;
@@ -52,9 +55,18 @@ public class InsertOrUpdateBatchStatementExecutor
     public InsertOrUpdateBatchStatementExecutor(
             StatementFactory insertStmtFactory,
             StatementFactory updateStmtFactory,
-            SeaTunnelRowType valueRowType,
+            TableSchema valueTableSchema,
+            TableSchema databaseTableSchema,
             JdbcRowConverter rowConverter) {
-        this(null, insertStmtFactory, updateStmtFactory, null, null, valueRowType, rowConverter);
+        this(
+                null,
+                insertStmtFactory,
+                updateStmtFactory,
+                null,
+                null,
+                valueTableSchema,
+                databaseTableSchema,
+                rowConverter);
     }
 
     @Override
@@ -74,14 +86,14 @@ public class InsertOrUpdateBatchStatementExecutor
                 insertStatement.executeBatch();
                 insertStatement.clearBatch();
             }
-            rowConverter.toExternal(valueRowType, record, updateStatement);
+            rowConverter.toExternal(valueTableSchema, databaseTableSchema, record, updateStatement);
             updateStatement.addBatch();
         } else {
             if (preExistFlag != null && preExistFlag) {
                 updateStatement.executeBatch();
                 updateStatement.clearBatch();
             }
-            rowConverter.toExternal(valueRowType, record, insertStatement);
+            rowConverter.toExternal(valueTableSchema, databaseTableSchema, record, insertStatement);
             insertStatement.addBatch();
         }
 
@@ -105,13 +117,16 @@ public class InsertOrUpdateBatchStatementExecutor
 
     @Override
     public void closeStatements() throws SQLException {
-        if (!submitted) {
-            executeBatch();
-        }
-        for (PreparedStatement statement :
-                Arrays.asList(existStatement, insertStatement, updateStatement)) {
-            if (statement != null) {
-                statement.close();
+        try {
+            if (!submitted) {
+                executeBatch();
+            }
+        } finally {
+            for (PreparedStatement statement :
+                    Arrays.asList(existStatement, insertStatement, updateStatement)) {
+                if (statement != null) {
+                    statement.close();
+                }
             }
         }
     }
@@ -131,13 +146,13 @@ public class InsertOrUpdateBatchStatementExecutor
                 return true;
             default:
                 throw new JdbcConnectorException(
-                        CommonErrorCode.UNSUPPORTED_OPERATION,
+                        CommonErrorCodeDeprecated.UNSUPPORTED_OPERATION,
                         "unsupported row kind: " + record.getRowKind());
         }
     }
 
     private boolean exist(SeaTunnelRow pk) throws SQLException {
-        rowConverter.toExternal(keyRowType, pk, existStatement);
+        rowConverter.toExternal(keyTableSchema, databaseTableSchema, pk, existStatement);
         try (ResultSet resultSet = existStatement.executeQuery()) {
             return resultSet.next();
         }

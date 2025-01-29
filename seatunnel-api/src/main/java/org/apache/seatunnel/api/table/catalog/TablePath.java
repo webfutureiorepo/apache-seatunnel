@@ -17,9 +17,11 @@
 
 package org.apache.seatunnel.api.table.catalog;
 
+import org.apache.commons.lang3.StringUtils;
+
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
-import lombok.RequiredArgsConstructor;
+import lombok.NonNull;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -27,18 +29,38 @@ import java.util.List;
 
 @Getter
 @EqualsAndHashCode
-@RequiredArgsConstructor
 public final class TablePath implements Serializable {
     private static final long serialVersionUID = 1L;
     private final String databaseName;
     private final String schemaName;
-    private final String tableName;
+    @NonNull private final String tableName;
+
+    public TablePath(String databaseName, String schemaName, @NonNull String tableName) {
+        this.databaseName = databaseName;
+        this.schemaName = schemaName;
+        this.tableName = tableName;
+        if (StringUtils.isEmpty(tableName)) {
+            throw new IllegalArgumentException("tableName cannot be empty");
+        }
+    }
+
+    public static final TablePath DEFAULT = TablePath.of("default", "default", "default");
 
     public static TablePath of(String fullName) {
+        return of(fullName, false);
+    }
+
+    public static TablePath of(String fullName, boolean schemaFirst) {
         String[] paths = fullName.split("\\.");
 
+        if (paths.length == 1) {
+            return of(null, paths[0]);
+        }
         if (paths.length == 2) {
-            return of(paths[0], paths[1]);
+            if (schemaFirst) {
+                return of(null, paths[0], paths[1]);
+            }
+            return of(paths[0], null, paths[1]);
         }
         if (paths.length == 3) {
             return of(paths[0], paths[1], paths[2]);

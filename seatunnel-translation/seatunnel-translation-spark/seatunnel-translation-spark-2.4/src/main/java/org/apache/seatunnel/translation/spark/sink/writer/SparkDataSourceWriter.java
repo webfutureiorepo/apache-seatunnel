@@ -17,8 +17,11 @@
 
 package org.apache.seatunnel.translation.spark.sink.writer;
 
+import org.apache.seatunnel.api.sink.MultiTableResourceManager;
 import org.apache.seatunnel.api.sink.SeaTunnelSink;
 import org.apache.seatunnel.api.sink.SinkAggregatedCommitter;
+import org.apache.seatunnel.api.sink.SupportResourceShare;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 
 import org.apache.spark.sql.catalyst.InternalRow;
@@ -44,19 +47,41 @@ public class SparkDataSourceWriter<StateT, CommitInfoT, AggregatedCommitInfoT>
     @Nullable protected final SinkAggregatedCommitter<CommitInfoT, AggregatedCommitInfoT>
             sinkAggregatedCommitter;
 
+    protected final CatalogTable[] catalogTables;
+    protected final String jobId;
+    protected final int parallelism;
+
+    private MultiTableResourceManager resourceManager;
+
     public SparkDataSourceWriter(
-            SeaTunnelSink<SeaTunnelRow, StateT, CommitInfoT, AggregatedCommitInfoT> sink)
+            SeaTunnelSink<SeaTunnelRow, StateT, CommitInfoT, AggregatedCommitInfoT> sink,
+            CatalogTable[] catalogTables,
+            String jobId,
+            int parallelism)
             throws IOException {
         this.sink = sink;
+        this.catalogTables = catalogTables;
+        this.jobId = jobId;
+        this.parallelism = parallelism;
         this.sinkAggregatedCommitter = sink.createAggregatedCommitter().orElse(null);
         if (sinkAggregatedCommitter != null) {
+            // TODO close it
+            if (this.sinkAggregatedCommitter instanceof SupportResourceShare) {
+                resourceManager =
+                        ((SupportResourceShare) this.sinkAggregatedCommitter)
+                                .initMultiTableResourceManager(1, 1);
+            }
             sinkAggregatedCommitter.init();
+            if (resourceManager != null) {
+                ((SupportResourceShare) this.sinkAggregatedCommitter)
+                        .setMultiTableResourceManager(resourceManager, 0);
+            }
         }
     }
 
     @Override
     public DataWriterFactory<InternalRow> createWriterFactory() {
-        return new SparkDataWriterFactory<>(sink);
+        return new SparkDataWriterFactory<>(sink, catalogTables, jobId, parallelism);
     }
 
     @Override

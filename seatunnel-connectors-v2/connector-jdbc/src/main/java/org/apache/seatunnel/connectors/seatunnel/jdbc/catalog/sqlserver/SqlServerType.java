@@ -17,9 +17,9 @@
 
 package org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.sqlserver;
 
-import org.apache.commons.lang3.tuple.Pair;
+import org.apache.seatunnel.shade.com.google.common.collect.ImmutableMap;
 
-import com.google.common.collect.ImmutableMap;
+import org.apache.commons.lang3.tuple.Pair;
 
 import java.math.BigDecimal;
 import java.sql.SQLType;
@@ -28,12 +28,14 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
+@Deprecated
 public enum SqlServerType implements SQLType {
     UNKNOWN("unknown", 999, Object.class),
     TINYINT("tinyint", java.sql.Types.TINYINT, Short.class),
     BIT("bit", java.sql.Types.BIT, Boolean.class),
     SMALLINT("smallint", java.sql.Types.SMALLINT, Short.class),
     INTEGER("int", java.sql.Types.INTEGER, Integer.class),
+    INT_IDENTITY("int identity", java.sql.Types.INTEGER, Integer.class),
     BIGINT("bigint", java.sql.Types.BIGINT, Long.class),
     FLOAT("float", java.sql.Types.DOUBLE, Double.class),
     REAL("real", java.sql.Types.REAL, Float.class),

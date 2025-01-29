@@ -19,10 +19,12 @@ package org.apache.seatunnel.connectors.seatunnel.elasticsearch.client;
 
 import org.apache.seatunnel.shade.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.seatunnel.shade.com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.seatunnel.shade.com.fasterxml.jackson.databind.node.ArrayNode;
 import org.apache.seatunnel.shade.com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.seatunnel.shade.com.fasterxml.jackson.databind.node.TextNode;
-import org.apache.seatunnel.shade.com.typesafe.config.Config;
 
+import org.apache.seatunnel.api.configuration.ReadonlyConfig;
+import org.apache.seatunnel.api.table.converter.BasicTypeDefine;
 import org.apache.seatunnel.common.utils.JsonUtils;
 import org.apache.seatunnel.connectors.seatunnel.elasticsearch.config.EsClusterConnectionConfig;
 import org.apache.seatunnel.connectors.seatunnel.elasticsearch.dto.BulkResponse;
@@ -34,6 +36,7 @@ import org.apache.seatunnel.connectors.seatunnel.elasticsearch.exception.Elastic
 import org.apache.seatunnel.connectors.seatunnel.elasticsearch.util.SSLUtils;
 
 import org.apache.commons.collections4.CollectionUtils;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.http.HttpHost;
 import org.apache.http.HttpStatus;
 import org.apache.http.auth.AuthScope;
@@ -55,6 +58,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import javax.net.ssl.SSLContext;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -65,8 +69,15 @@ import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import static org.apache.seatunnel.connectors.seatunnel.elasticsearch.client.EsType.AGGREGATE_METRIC_DOUBLE;
+import static org.apache.seatunnel.connectors.seatunnel.elasticsearch.client.EsType.ALIAS;
+import static org.apache.seatunnel.connectors.seatunnel.elasticsearch.client.EsType.DATE;
+import static org.apache.seatunnel.connectors.seatunnel.elasticsearch.client.EsType.DATE_NANOS;
+import static org.apache.seatunnel.connectors.seatunnel.elasticsearch.client.EsType.DENSE_VECTOR;
+import static org.apache.seatunnel.connectors.seatunnel.elasticsearch.client.EsType.OBJECT;
+
 @Slf4j
-public class EsRestClient {
+public class EsRestClient implements Closeable {
 
     private static final int CONNECTION_REQUEST_TIMEOUT = 10 * 1000;
 
@@ -74,64 +85,30 @@ public class EsRestClient {
 
     private final RestClient restClient;
 
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
     private EsRestClient(RestClient restClient) {
         this.restClient = restClient;
     }
 
-    public static EsRestClient createInstance(Config pluginConfig) {
-        List<String> hosts = pluginConfig.getStringList(EsClusterConnectionConfig.HOSTS.key());
-        Optional<String> username = Optional.empty();
-        Optional<String> password = Optional.empty();
-        if (pluginConfig.hasPath(EsClusterConnectionConfig.USERNAME.key())) {
-            username =
-                    Optional.of(pluginConfig.getString(EsClusterConnectionConfig.USERNAME.key()));
-            if (pluginConfig.hasPath(EsClusterConnectionConfig.PASSWORD.key())) {
-                password =
-                        Optional.of(
-                                pluginConfig.getString(EsClusterConnectionConfig.PASSWORD.key()));
-            }
-        }
+    public static EsRestClient createInstance(ReadonlyConfig config) {
+        List<String> hosts = config.get(EsClusterConnectionConfig.HOSTS);
+        Optional<String> username = config.getOptional(EsClusterConnectionConfig.USERNAME);
+        Optional<String> password = config.getOptional(EsClusterConnectionConfig.PASSWORD);
         Optional<String> keystorePath = Optional.empty();
         Optional<String> keystorePassword = Optional.empty();
         Optional<String> truststorePath = Optional.empty();
         Optional<String> truststorePassword = Optional.empty();
-        boolean tlsVerifyCertificate =
-                EsClusterConnectionConfig.TLS_VERIFY_CERTIFICATE.defaultValue();
-        if (pluginConfig.hasPath(EsClusterConnectionConfig.TLS_VERIFY_CERTIFICATE.key())) {
-            tlsVerifyCertificate =
-                    pluginConfig.getBoolean(EsClusterConnectionConfig.TLS_VERIFY_CERTIFICATE.key());
-        }
+        boolean tlsVerifyCertificate = config.get(EsClusterConnectionConfig.TLS_VERIFY_CERTIFICATE);
         if (tlsVerifyCertificate) {
-            if (pluginConfig.hasPath(EsClusterConnectionConfig.TLS_KEY_STORE_PATH.key())) {
-                keystorePath =
-                        Optional.of(
-                                pluginConfig.getString(
-                                        EsClusterConnectionConfig.TLS_KEY_STORE_PATH.key()));
-            }
-            if (pluginConfig.hasPath(EsClusterConnectionConfig.TLS_KEY_STORE_PASSWORD.key())) {
-                keystorePassword =
-                        Optional.of(
-                                pluginConfig.getString(
-                                        EsClusterConnectionConfig.TLS_KEY_STORE_PASSWORD.key()));
-            }
-            if (pluginConfig.hasPath(EsClusterConnectionConfig.TLS_TRUST_STORE_PATH.key())) {
-                truststorePath =
-                        Optional.of(
-                                pluginConfig.getString(
-                                        EsClusterConnectionConfig.TLS_TRUST_STORE_PATH.key()));
-            }
-            if (pluginConfig.hasPath(EsClusterConnectionConfig.TLS_TRUST_STORE_PASSWORD.key())) {
-                truststorePassword =
-                        Optional.of(
-                                pluginConfig.getString(
-                                        EsClusterConnectionConfig.TLS_TRUST_STORE_PASSWORD.key()));
-            }
+            keystorePath = config.getOptional(EsClusterConnectionConfig.TLS_KEY_STORE_PATH);
+            keystorePassword = config.getOptional(EsClusterConnectionConfig.TLS_KEY_STORE_PASSWORD);
+            truststorePath = config.getOptional(EsClusterConnectionConfig.TLS_TRUST_STORE_PATH);
+            truststorePassword =
+                    config.getOptional(EsClusterConnectionConfig.TLS_TRUST_STORE_PASSWORD);
         }
-        boolean tlsVerifyHostnames = EsClusterConnectionConfig.TLS_VERIFY_HOSTNAME.defaultValue();
-        if (pluginConfig.hasPath(EsClusterConnectionConfig.TLS_VERIFY_HOSTNAME.key())) {
-            tlsVerifyHostnames =
-                    pluginConfig.getBoolean(EsClusterConnectionConfig.TLS_VERIFY_HOSTNAME.key());
-        }
+
+        boolean tlsVerifyHostnames = config.get(EsClusterConnectionConfig.TLS_VERIFY_HOSTNAME);
         return createInstance(
                 hosts,
                 username,
@@ -210,7 +187,7 @@ public class EsRestClient {
                                             keystorePassword,
                                             truststorePath,
                                             truststorePassword);
-                            sslContext.ifPresent(e -> httpClientBuilder.setSSLContext(e));
+                            sslContext.ifPresent(httpClientBuilder::setSSLContext);
                         } else {
                             SSLContext sslContext =
                                     SSLContexts.custom()
@@ -240,9 +217,8 @@ public class EsRestClient {
                         "bulk es Response is null");
             }
             if (response.getStatusLine().getStatusCode() == HttpStatus.SC_OK) {
-                ObjectMapper objectMapper = new ObjectMapper();
                 String entity = EntityUtils.toString(response.getEntity());
-                JsonNode json = objectMapper.readTree(entity);
+                JsonNode json = OBJECT_MAPPER.readTree(entity);
                 int took = json.get("took").asInt();
                 boolean errors = json.get("errors").asBoolean();
                 return new BulkResponse(errors, took, entity);
@@ -250,13 +226,16 @@ public class EsRestClient {
                 throw new ElasticsearchConnectorException(
                         ElasticsearchConnectorErrorCode.BULK_RESPONSE_ERROR,
                         String.format(
-                                "bulk es response status code=%d,request boy=%s",
-                                response.getStatusLine().getStatusCode(), requestBody));
+                                "bulk es response status=%s,request body(truncate)=%s",
+                                response,
+                                requestBody.substring(0, Math.min(1000, requestBody.length()))));
             }
         } catch (IOException e) {
             throw new ElasticsearchConnectorException(
                     ElasticsearchConnectorErrorCode.BULK_RESPONSE_ERROR,
-                    String.format("bulk es error,request boy=%s", requestBody),
+                    String.format(
+                            "bulk es error,request body(truncate)=%s",
+                            requestBody.substring(0, Math.min(1000, requestBody.length()))),
                     e);
         }
     }
@@ -266,14 +245,13 @@ public class EsRestClient {
         try {
             Response response = restClient.performRequest(request);
             String result = EntityUtils.toString(response.getEntity());
-            ObjectMapper objectMapper = new ObjectMapper();
-            JsonNode jsonNode = objectMapper.readTree(result);
+            JsonNode jsonNode = OBJECT_MAPPER.readTree(result);
             JsonNode versionNode = jsonNode.get("version");
             return ElasticsearchClusterInfo.builder()
                     .clusterVersion(versionNode.get("number").asText())
                     .distribution(
                             Optional.ofNullable(versionNode.get("distribution"))
-                                    .map(e -> e.asText())
+                                    .map(JsonNode::asText)
                                     .orElse(null))
                     .build();
         } catch (IOException e) {
@@ -284,6 +262,7 @@ public class EsRestClient {
         }
     }
 
+    @Override
     public void close() {
         try {
             restClient.close();
@@ -312,9 +291,7 @@ public class EsRestClient {
         param.put("sort", new String[] {"_doc"});
         param.put("size", scrollSize);
         String endpoint = "/" + index + "/_search?scroll=" + scrollTime;
-        ScrollResult scrollResult =
-                getDocsFromScrollRequest(endpoint, JsonUtils.toJsonString(param));
-        return scrollResult;
+        return getDocsFromScrollRequest(endpoint, JsonUtils.toJsonString(param));
     }
 
     /**
@@ -327,9 +304,7 @@ public class EsRestClient {
         Map<String, String> param = new HashMap<>();
         param.put("scroll_id", scrollId);
         param.put("scroll", scrollTime);
-        ScrollResult scrollResult =
-                getDocsFromScrollRequest("/_search/scroll", JsonUtils.toJsonString(param));
-        return scrollResult;
+        return getDocsFromScrollRequest("/_search/scroll", JsonUtils.toJsonString(param));
     }
 
     private ScrollResult getDocsFromScrollRequest(String endpoint, String requestBody) {
@@ -355,19 +330,18 @@ public class EsRestClient {
                                 "POST %s,total shards(%d)!= successful shards(%d)",
                                 endpoint, totalShards, successful));
 
-                ScrollResult scrollResult = getDocsFromScrollResponse(responseJson);
-                return scrollResult;
+                return getDocsFromScrollResponse(responseJson);
             } else {
                 throw new ElasticsearchConnectorException(
                         ElasticsearchConnectorErrorCode.SCROLL_REQUEST_ERROR,
                         String.format(
-                                "POST %s response status code=%d,request boy=%s",
+                                "POST %s response status code=%d,request body=%s",
                                 endpoint, response.getStatusLine().getStatusCode(), requestBody));
             }
         } catch (IOException e) {
             throw new ElasticsearchConnectorException(
                     ElasticsearchConnectorErrorCode.SCROLL_REQUEST_ERROR,
-                    String.format("POST %s error,request boy=%s", endpoint, requestBody),
+                    String.format("POST %s error,request body=%s", endpoint, requestBody),
                     e);
         }
     }
@@ -381,13 +355,11 @@ public class EsRestClient {
         List<Map<String, Object>> docs = new ArrayList<>(hitsNode.size());
         scrollResult.setDocs(docs);
 
-        Iterator<JsonNode> iter = hitsNode.iterator();
-        while (iter.hasNext()) {
+        for (JsonNode jsonNode : hitsNode) {
             Map<String, Object> doc = new HashMap<>();
-            JsonNode hitNode = iter.next();
-            doc.put("_index", hitNode.get("_index").textValue());
-            doc.put("_id", hitNode.get("_id").textValue());
-            JsonNode source = hitNode.get("_source");
+            doc.put("_index", jsonNode.get("_index").textValue());
+            doc.put("_id", jsonNode.get("_id").textValue());
+            JsonNode source = jsonNode.get("_source");
             for (Iterator<Map.Entry<String, JsonNode>> iterator = source.fields();
                     iterator.hasNext(); ) {
                 Map.Entry<String, JsonNode> entry = iterator.next();
@@ -403,8 +375,34 @@ public class EsRestClient {
         return scrollResult;
     }
 
+    /**
+     * Instead of the getIndexDocsCount method to determine if the index exists,
+     *
+     * <p>
+     *
+     * <p>getIndexDocsCount throws an exception if the index does not exist
+     *
+     * <p>
+     *
+     * @param index index
+     * @return true or false
+     */
+    public boolean checkIndexExist(String index) {
+        Request request = new Request("HEAD", "/" + index.toLowerCase());
+        try {
+            Response response = restClient.performRequest(request);
+            int statusCode = response.getStatusLine().getStatusCode();
+            return statusCode == 200;
+        } catch (Exception ex) {
+            throw new ElasticsearchConnectorException(
+                    ElasticsearchConnectorErrorCode.CHECK_INDEX_FAILED, ex);
+        }
+    }
+
     public List<IndexDocsCount> getIndexDocsCount(String index) {
-        String endpoint = String.format("/_cat/indices/%s?h=index,docsCount&format=json", index);
+        String endpoint =
+                String.format(
+                        "/_cat/indices/%s?h=index,docsCount&format=json", index.toLowerCase());
         Request request = new Request("GET", endpoint);
         try {
             Response response = restClient.performRequest(request);
@@ -415,9 +413,7 @@ public class EsRestClient {
             }
             if (response.getStatusLine().getStatusCode() == HttpStatus.SC_OK) {
                 String entity = EntityUtils.toString(response.getEntity());
-                List<IndexDocsCount> indexDocsCounts =
-                        JsonUtils.toList(entity, IndexDocsCount.class);
-                return indexDocsCounts;
+                return JsonUtils.toList(entity, IndexDocsCount.class);
             } else {
                 throw new ElasticsearchConnectorException(
                         ElasticsearchConnectorErrorCode.GET_INDEX_DOCS_COUNT_FAILED,
@@ -459,10 +455,16 @@ public class EsRestClient {
         }
     }
 
-    // todo: We don't support set the index mapping now.
     public void createIndex(String indexName) {
-        String endpoint = String.format("/%s", indexName);
+        createIndex(indexName, null);
+    }
+
+    public void createIndex(String indexName, String mapping) {
+        String endpoint = String.format("/%s", indexName.toLowerCase());
         Request request = new Request("PUT", endpoint);
+        if (StringUtils.isNotEmpty(mapping)) {
+            request.setJsonEntity(mapping);
+        }
         try {
             Response response = restClient.performRequest(request);
             if (response == null) {
@@ -484,7 +486,7 @@ public class EsRestClient {
     }
 
     public void dropIndex(String tableName) {
-        String endpoint = String.format("/%s", tableName);
+        String endpoint = String.format("/%s", tableName.toLowerCase());
         Request request = new Request("DELETE", endpoint);
         try {
             Response response = restClient.performRequest(request);
@@ -509,16 +511,46 @@ public class EsRestClient {
         }
     }
 
+    public void clearIndexData(String indexName) {
+        String endpoint = String.format("/%s/_delete_by_query", indexName.toLowerCase());
+        Request request = new Request("POST", endpoint);
+        String jsonString = "{ \"query\": { \"match_all\": {} } }";
+        request.setJsonEntity(jsonString);
+
+        try {
+            Response response = restClient.performRequest(request);
+            if (response == null) {
+                throw new ElasticsearchConnectorException(
+                        ElasticsearchConnectorErrorCode.CLEAR_INDEX_DATA_FAILED,
+                        "POST " + endpoint + " response null");
+            }
+            // todo: if the index doesn't exist, the response status code is 200?
+            if (response.getStatusLine().getStatusCode() == HttpStatus.SC_OK) {
+                return;
+            } else {
+                throw new ElasticsearchConnectorException(
+                        ElasticsearchConnectorErrorCode.CLEAR_INDEX_DATA_FAILED,
+                        String.format(
+                                "POST %s response status code=%d",
+                                endpoint, response.getStatusLine().getStatusCode()));
+            }
+        } catch (IOException ex) {
+            throw new ElasticsearchConnectorException(
+                    ElasticsearchConnectorErrorCode.CLEAR_INDEX_DATA_FAILED, ex);
+        }
+    }
+
     /**
      * get es field name and type mapping realtion
      *
      * @param index index name
      * @return {key-> field name,value->es type}
      */
-    public Map<String, String> getFieldTypeMapping(String index, List<String> source) {
+    public Map<String, BasicTypeDefine<EsType>> getFieldTypeMapping(
+            String index, List<String> source) {
         String endpoint = String.format("/%s/_mappings", index);
         Request request = new Request("GET", endpoint);
-        Map<String, String> mapping = new HashMap<>();
+        Map<String, BasicTypeDefine<EsType>> mapping = new HashMap<>();
         try {
             Response response = restClient.performRequest(request);
             if (response == null) {
@@ -561,9 +593,9 @@ public class EsRestClient {
         return mapping;
     }
 
-    private static Map<String, String> getFieldTypeMappingFromProperties(
+    private static Map<String, BasicTypeDefine<EsType>> getFieldTypeMappingFromProperties(
             JsonNode properties, List<String> source) {
-        Map<String, String> allElasticSearchFieldTypeInfoMap = new HashMap<>();
+        Map<String, BasicTypeDefine<EsType>> allElasticSearchFieldTypeInfoMap = new HashMap<>();
         properties
                 .fields()
                 .forEachRemaining(
@@ -571,28 +603,168 @@ public class EsRestClient {
                             String fieldName = entry.getKey();
                             JsonNode fieldProperty = entry.getValue();
                             if (fieldProperty.has("type")) {
-                                allElasticSearchFieldTypeInfoMap.put(
-                                        fieldName, fieldProperty.get("type").asText());
+                                String type = fieldProperty.get("type").asText();
+                                BasicTypeDefine.BasicTypeDefineBuilder<EsType> typeDefine =
+                                        BasicTypeDefine.<EsType>builder()
+                                                .name(fieldName)
+                                                .columnType(type)
+                                                .dataType(type);
+                                if (type.equalsIgnoreCase(AGGREGATE_METRIC_DOUBLE)) {
+                                    ArrayNode metrics = ((ArrayNode) fieldProperty.get("metrics"));
+                                    List<String> metricsList = new ArrayList<>();
+                                    for (JsonNode node : metrics) {
+                                        metricsList.add(node.asText());
+                                    }
+                                    Map<String, Object> options = new HashMap<>();
+                                    options.put("metrics", metricsList);
+                                    typeDefine.nativeType(new EsType(type, options));
+                                } else if (type.equalsIgnoreCase(ALIAS)) {
+                                    String path = fieldProperty.get("path").asText();
+                                    Map<String, Object> options = new HashMap<>();
+                                    options.put("path", path);
+                                    typeDefine.nativeType(new EsType(type, options));
+                                } else if (type.equalsIgnoreCase(DENSE_VECTOR)) {
+                                    String elementType =
+                                            fieldProperty.get("element_type") == null
+                                                    ? "float"
+                                                    : fieldProperty.get("element_type").asText();
+                                    Map<String, Object> options = new HashMap<>();
+                                    options.put("element_type", elementType);
+                                    typeDefine.nativeType(new EsType(type, options));
+                                } else if (type.equalsIgnoreCase(DATE)
+                                        || type.equalsIgnoreCase(DATE_NANOS)) {
+                                    String format =
+                                            fieldProperty.get("format") != null
+                                                    ? fieldProperty.get("format").asText()
+                                                    : "strict_date_optional_time_nanos||epoch_millis";
+                                    Map<String, Object> options = new HashMap<>();
+                                    options.put("format", format);
+                                    typeDefine.nativeType(new EsType(type, options));
+                                } else {
+                                    typeDefine.nativeType(new EsType(type, new HashMap<>()));
+                                }
+                                allElasticSearchFieldTypeInfoMap.put(fieldName, typeDefine.build());
+                            } else if (fieldProperty.has("properties")) {
+                                // it should be object type
+                                JsonNode propertiesNode = fieldProperty.get("properties");
+                                List<String> fields = new ArrayList<>();
+                                propertiesNode.fieldNames().forEachRemaining(fields::add);
+                                Map<String, BasicTypeDefine<EsType>> subFieldTypeInfoMap =
+                                        getFieldTypeMappingFromProperties(propertiesNode, fields);
+                                BasicTypeDefine.BasicTypeDefineBuilder<EsType> typeDefine =
+                                        BasicTypeDefine.<EsType>builder()
+                                                .name(fieldName)
+                                                .columnType(OBJECT)
+                                                .dataType(OBJECT);
+                                typeDefine.nativeType(
+                                        new EsType(OBJECT, (Map) subFieldTypeInfoMap));
+                                allElasticSearchFieldTypeInfoMap.put(fieldName, typeDefine.build());
                             }
                         });
         if (CollectionUtils.isEmpty(source)) {
             return allElasticSearchFieldTypeInfoMap;
         }
 
+        allElasticSearchFieldTypeInfoMap.forEach(
+                (fieldName, fieldType) -> {
+                    if (fieldType.getDataType().equalsIgnoreCase(ALIAS)) {
+                        BasicTypeDefine<EsType> type =
+                                allElasticSearchFieldTypeInfoMap.get(
+                                        fieldType.getNativeType().getOptions().get("path"));
+                        if (type != null) {
+                            allElasticSearchFieldTypeInfoMap.put(fieldName, type);
+                        }
+                    }
+                });
+
         return source.stream()
                 .collect(
                         Collectors.toMap(
                                 Function.identity(),
                                 fieldName -> {
-                                    String fieldType =
+                                    BasicTypeDefine<EsType> fieldType =
                                             allElasticSearchFieldTypeInfoMap.get(fieldName);
                                     if (fieldType == null) {
                                         log.warn(
                                                 "fail to get elasticsearch field {} mapping type,so give a default type text",
                                                 fieldName);
-                                        return "text";
+                                        return BasicTypeDefine.<EsType>builder()
+                                                .name(fieldName)
+                                                .columnType("text")
+                                                .dataType("text")
+                                                .build();
                                     }
                                     return fieldType;
                                 }));
+    }
+
+    /**
+     * Add a new field to an existing index
+     *
+     * @param index index name
+     * @param fieldTypeDefine field type definition
+     */
+    public void addField(String index, BasicTypeDefine<EsType> fieldTypeDefine) {
+        String endpoint = String.format("/%s/_mapping", index);
+        Request request = new Request("PUT", endpoint);
+
+        // Build mapping JSON for the new field
+        ObjectNode mappingJson = OBJECT_MAPPER.createObjectNode();
+        ObjectNode propertiesJson = OBJECT_MAPPER.createObjectNode();
+        ObjectNode fieldJson = OBJECT_MAPPER.createObjectNode();
+
+        // Set field type
+        fieldJson.put("type", fieldTypeDefine.getNativeType().getType());
+
+        // Add additional options based on field type
+        Map<String, Object> options = fieldTypeDefine.getNativeType().getOptions();
+        if (!options.isEmpty()) {
+            if (fieldTypeDefine.getNativeType().getType().equalsIgnoreCase(DATE)
+                    || fieldTypeDefine.getNativeType().getType().equalsIgnoreCase(DATE_NANOS)) {
+                fieldJson.put("format", options.get("format").toString());
+            } else if (fieldTypeDefine.getNativeType().getType().equalsIgnoreCase(DENSE_VECTOR)) {
+                fieldJson.put("element_type", options.get("element_type").toString());
+            } else if (fieldTypeDefine.getNativeType().getType().equalsIgnoreCase(ALIAS)) {
+                fieldJson.put("path", options.get("path").toString());
+            } else if (fieldTypeDefine
+                    .getNativeType()
+                    .getType()
+                    .equalsIgnoreCase(AGGREGATE_METRIC_DOUBLE)) {
+                ArrayNode metricsArray = OBJECT_MAPPER.createArrayNode();
+                @SuppressWarnings("unchecked")
+                List<String> metrics = (List<String>) options.get("metrics");
+                metrics.forEach(metricsArray::add);
+                fieldJson.set("metrics", metricsArray);
+            }
+        }
+
+        propertiesJson.set(fieldTypeDefine.getName(), fieldJson);
+        mappingJson.set("properties", propertiesJson);
+
+        request.setJsonEntity(mappingJson.toString());
+
+        try {
+            Response response = restClient.performRequest(request);
+            if (response == null) {
+                throw new ElasticsearchConnectorException(
+                        ElasticsearchConnectorErrorCode.ADD_FIELD_FAILED,
+                        "PUT " + endpoint + " response null");
+            }
+            if (response.getStatusLine().getStatusCode() != HttpStatus.SC_OK) {
+                throw new ElasticsearchConnectorException(
+                        ElasticsearchConnectorErrorCode.ADD_FIELD_FAILED,
+                        String.format(
+                                "PUT %s response status code=%d, response=%s",
+                                endpoint,
+                                response.getStatusLine().getStatusCode(),
+                                EntityUtils.toString(response.getEntity())));
+            }
+        } catch (IOException ex) {
+            throw new ElasticsearchConnectorException(
+                    ElasticsearchConnectorErrorCode.ADD_FIELD_FAILED,
+                    String.format(
+                            "Failed to add field %s to index %s", fieldTypeDefine.getName(), index),
+                    ex);
+        }
     }
 }

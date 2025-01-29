@@ -2,13 +2,13 @@
 
 Seatunnel connector kafka supports parsing data extracted through kafka connect source, especially data extracted from kafka connect jdbc and kafka connect debezium
 
-# How to use
+# How To Use
 
-## Kafka output to mysql
+## Kafka Sink Mysql
 
 ```bash
 env {
-    execution.parallelism = 1
+    parallelism = 1
     job.mode = "BATCH"
 }
 
@@ -16,7 +16,7 @@ source {
   Kafka {
     bootstrap.servers = "localhost:9092"
     topic = "jdbc_source_record"
-    result_table_name = "kafka_table"
+    plugin_output = "kafka_table"
     start_mode = earliest
     schema = {
       fields {

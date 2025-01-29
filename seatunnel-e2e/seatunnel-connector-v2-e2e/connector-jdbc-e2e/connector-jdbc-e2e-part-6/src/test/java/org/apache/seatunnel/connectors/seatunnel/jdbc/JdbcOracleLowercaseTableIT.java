@@ -18,12 +18,19 @@
 
 package org.apache.seatunnel.connectors.seatunnel.jdbc;
 
+import org.apache.seatunnel.shade.com.google.common.collect.Lists;
+
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
+import org.apache.seatunnel.api.table.catalog.Column;
+import org.apache.seatunnel.api.table.catalog.TablePath;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.oracle.OracleCatalog;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.oracle.OracleURLParser;
 
 import org.apache.commons.lang3.tuple.Pair;
 
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.OracleContainer;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
@@ -31,7 +38,7 @@ import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.utility.DockerLoggerFactory;
 import org.testcontainers.utility.MountableFile;
 
-import com.google.common.collect.Lists;
+import lombok.SneakyThrows;
 
 import java.math.BigDecimal;
 import java.sql.Date;
@@ -61,6 +68,24 @@ public class JdbcOracleLowercaseTableIT extends AbstractJdbcIT {
     private static final List<String> CONFIG_FILE = Lists.newArrayList();
 
     private static final String CREATE_SQL =
+            "create table %s\n"
+                    + "(\n"
+                    + "    VARCHAR_10_COL                varchar2(10),\n"
+                    + "    CHAR_10_COL                   char(10),\n"
+                    + "    CLOB_COL                      clob,\n"
+                    + "    NUMBER_3_SF_2_DP              number(3, 2),\n"
+                    + "    INTEGER_COL                   integer,\n"
+                    + "    FLOAT_COL                     float(10),\n"
+                    + "    REAL_COL                      real,\n"
+                    + "    BINARY_FLOAT_COL              binary_float,\n"
+                    + "    BINARY_DOUBLE_COL             binary_double,\n"
+                    + "    DATE_COL                      date,\n"
+                    + "    TIMESTAMP_WITH_3_FRAC_SEC_COL timestamp(3),\n"
+                    + "    TIMESTAMP_WITH_LOCAL_TZ       timestamp with local time zone,\n"
+                    + "    constraint PK_T_COL1 primary key (INTEGER_COL)"
+                    + ")";
+
+    private static final String SINK_CREATE_SQL =
             "create table %s\n"
                     + "(\n"
                     + "    VARCHAR_10_COL                varchar2(10),\n"
@@ -109,14 +134,12 @@ public class JdbcOracleLowercaseTableIT extends AbstractJdbcIT {
                 .catalogSchema(SCHEMA)
                 .catalogTable(CATALOG_TABLE)
                 .createSql(CREATE_SQL)
+                .sinkCreateSql(SINK_CREATE_SQL)
                 .configFile(CONFIG_FILE)
                 .insertSql(insertSql)
                 .testData(testDataSet)
                 .build();
     }
-
-    @Override
-    void compareResult() {}
 
     @Override
     String driverUrl() {
@@ -213,5 +236,55 @@ public class JdbcOracleLowercaseTableIT extends AbstractJdbcIT {
                         OracleURLParser.parse(jdbcUrl),
                         SCHEMA);
         catalog.open();
+    }
+
+    @Test
+    public void testCatalog() {
+        TablePath tablePathOracle = TablePath.of("XE", "TESTUSER", "E2E_TABLE_SOURCE_LOWER");
+        TablePath tablePathOracleCreateTablePath =
+                TablePath.of("XE", "TESTUSER", "E2E_TABLE_SOURCE_LOWER_AUTO");
+        OracleCatalog oracleCatalog =
+                new OracleCatalog(
+                        "Oracle",
+                        jdbcCase.getUserName(),
+                        jdbcCase.getPassword(),
+                        OracleURLParser.parse(
+                                jdbcCase.getJdbcUrl().replace(HOST, dbServer.getHost())),
+                        SCHEMA);
+        oracleCatalog.open();
+        catalog.executeSql(
+                tablePathOracle,
+                "comment on column E2E_TABLE_SOURCE_LOWER.CHAR_10_COL is '\"#¥%……&*（）;;'',,..``````//''@特殊注释''\\''\"'");
+        Assertions.assertTrue(oracleCatalog.tableExists(tablePathOracle));
+        Assertions.assertEquals(
+                oracleCatalog
+                        .getTable(tablePathOracle)
+                        .getTableSchema()
+                        .getColumns()
+                        .get(1)
+                        .getComment(),
+                "\"#¥%……&*（）;;',,..``````//'@特殊注释'\\'\"");
+        oracleCatalog.truncateTable(tablePathOracle, true);
+        Assertions.assertFalse(oracleCatalog.isExistsData(tablePathOracle));
+        // create table with comment
+        Assertions.assertFalse(oracleCatalog.tableExists(tablePathOracleCreateTablePath));
+        oracleCatalog.createTable(
+                tablePathOracleCreateTablePath, oracleCatalog.getTable(tablePathOracle), true);
+        Assertions.assertTrue(oracleCatalog.tableExists(tablePathOracleCreateTablePath));
+        final CatalogTable table = oracleCatalog.getTable(tablePathOracleCreateTablePath);
+        Assertions.assertEquals(
+                table.getTableSchema().getColumns().get(1).getComment(),
+                "\"#¥%……&*（）;;',,..``````//'@特殊注释'\\'\"");
+        testTableOfQuery(oracleCatalog);
+        oracleCatalog.close();
+    }
+
+    @SneakyThrows
+    private void testTableOfQuery(OracleCatalog oracleCatalog) {
+        String querySql = "select * from TESTUSER.E2E_TABLE_SOURCE_LOWER";
+        CatalogTable tableOfQuery = oracleCatalog.getTable(querySql);
+        final List<Column> columns = tableOfQuery.getTableSchema().getColumns();
+        Assertions.assertEquals(columns.get(0).getColumnLength(), 40);
+        Assertions.assertEquals(columns.get(1).getColumnLength(), 40);
     }
 }

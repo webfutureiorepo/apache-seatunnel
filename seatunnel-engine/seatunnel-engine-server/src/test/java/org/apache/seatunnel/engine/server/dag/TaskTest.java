@@ -17,17 +17,26 @@
 
 package org.apache.seatunnel.engine.server.dag;
 
+import org.apache.seatunnel.shade.com.google.common.collect.ImmutableMap;
+import org.apache.seatunnel.shade.com.google.common.collect.Sets;
 import org.apache.seatunnel.shade.com.typesafe.config.Config;
 import org.apache.seatunnel.shade.com.typesafe.config.ConfigFactory;
 
 import org.apache.seatunnel.api.common.JobContext;
 import org.apache.seatunnel.api.configuration.ReadonlyConfig;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
+import org.apache.seatunnel.api.table.catalog.Column;
+import org.apache.seatunnel.api.table.catalog.PhysicalColumn;
+import org.apache.seatunnel.api.table.catalog.TableIdentifier;
+import org.apache.seatunnel.api.table.catalog.TablePath;
+import org.apache.seatunnel.api.table.catalog.TableSchema;
+import org.apache.seatunnel.api.table.type.BasicType;
 import org.apache.seatunnel.common.constants.JobMode;
 import org.apache.seatunnel.connectors.seatunnel.console.sink.ConsoleSink;
 import org.apache.seatunnel.connectors.seatunnel.fake.source.FakeSource;
 import org.apache.seatunnel.engine.common.Constant;
+import org.apache.seatunnel.engine.common.config.EngineConfig;
 import org.apache.seatunnel.engine.common.config.JobConfig;
-import org.apache.seatunnel.engine.common.config.server.CheckpointConfig;
 import org.apache.seatunnel.engine.common.config.server.QueueType;
 import org.apache.seatunnel.engine.common.utils.IdGenerator;
 import org.apache.seatunnel.engine.common.utils.PassiveCompletableFuture;
@@ -46,32 +55,35 @@ import org.apache.seatunnel.engine.server.dag.physical.PlanUtils;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Sets;
 import com.hazelcast.map.IMap;
 
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
 import java.util.concurrent.Executors;
 
 public class TaskTest extends AbstractSeaTunnelServerTest {
 
     @Test
     public void testTask() throws MalformedURLException {
-        JobContext jobContext = new JobContext();
+        Long jobId = 1L;
+        JobContext jobContext = new JobContext(jobId);
         jobContext.setJobMode(JobMode.BATCH);
-        LogicalDag testLogicalDag = TestUtils.getTestLogicalDag(jobContext);
-
         JobConfig config = new JobConfig();
         config.setName("test");
+        config.setJobContext(jobContext);
+        LogicalDag testLogicalDag = TestUtils.getTestLogicalDag(jobContext, config);
 
         JobImmutableInformation jobImmutableInformation =
                 new JobImmutableInformation(
-                        1,
+                        jobId,
                         "Test",
                         nodeEngine.getSerializationService().toData(testLogicalDag),
                         config,
+                        Collections.emptyList(),
                         Collections.emptyList());
 
         PassiveCompletableFuture<Void> voidPassiveCompletableFuture =
@@ -80,7 +92,8 @@ public class TaskTest extends AbstractSeaTunnelServerTest {
                                 jobImmutableInformation.getJobId(),
                                 nodeEngine
                                         .getSerializationService()
-                                        .toData(jobImmutableInformation));
+                                        .toData(jobImmutableInformation),
+                                jobImmutableInformation.isStartWithSavePoint());
 
         Assertions.assertNotNull(voidPassiveCompletableFuture);
     }
@@ -95,7 +108,8 @@ public class TaskTest extends AbstractSeaTunnelServerTest {
                         idGenerator.getNextId(),
                         "fake",
                         createFakeSource(),
-                        Sets.newHashSet(new URL("file:///fake.jar")));
+                        Sets.newHashSet(new URL("file:///fake.jar")),
+                        Collections.emptySet());
         LogicalVertex fakeVertex = new LogicalVertex(fake.getId(), fake, 2);
 
         Action fake2 =
@@ -103,15 +117,28 @@ public class TaskTest extends AbstractSeaTunnelServerTest {
                         idGenerator.getNextId(),
                         "fake",
                         createFakeSource(),
-                        Sets.newHashSet(new URL("file:///fake.jar")));
+                        Sets.newHashSet(new URL("file:///fake.jar")),
+                        Collections.emptySet());
         LogicalVertex fake2Vertex = new LogicalVertex(fake2.getId(), fake2, 2);
+
+        List<Column> columns = new ArrayList<>();
+        columns.add(PhysicalColumn.of("id", BasicType.INT_TYPE, 11L, 0, true, 111, ""));
+
+        CatalogTable catalogTable =
+                CatalogTable.of(
+                        TableIdentifier.of("default", TablePath.DEFAULT),
+                        TableSchema.builder().columns(columns).build(),
+                        new HashMap<>(),
+                        Collections.emptyList(),
+                        "fake");
 
         Action console =
                 new SinkAction<>(
                         idGenerator.getNextId(),
                         "console",
-                        new ConsoleSink(),
-                        Sets.newHashSet(new URL("file:///console.jar")));
+                        new ConsoleSink(catalogTable, ReadonlyConfig.fromMap(new HashMap<>())),
+                        Sets.newHashSet(new URL("file:///console.jar")),
+                        Collections.emptySet());
         LogicalVertex consoleVertex = new LogicalVertex(console.getId(), console, 2);
 
         LogicalEdge edge = new LogicalEdge(fakeVertex, consoleVertex);
@@ -130,6 +157,7 @@ public class TaskTest extends AbstractSeaTunnelServerTest {
                         "Test",
                         nodeEngine.getSerializationService().toData(logicalDag),
                         config,
+                        Collections.emptyList(),
                         Collections.emptyList());
 
         IMap<Object, Object> runningJobState =
@@ -148,7 +176,7 @@ public class TaskTest extends AbstractSeaTunnelServerTest {
                                 runningJobState,
                                 runningJobStateTimestamp,
                                 QueueType.BLOCKINGQUEUE,
-                                new CheckpointConfig())
+                                new EngineConfig())
                         .f0();
 
         Assertions.assertEquals(physicalPlan.getPipelineList().size(), 1);
@@ -156,6 +184,36 @@ public class TaskTest extends AbstractSeaTunnelServerTest {
                 physicalPlan.getPipelineList().get(0).getCoordinatorVertexList().size(), 1);
         Assertions.assertEquals(
                 physicalPlan.getPipelineList().get(0).getPhysicalVertexList().size(), 2);
+        Assertions.assertEquals(
+                physicalPlan
+                        .getPipelineList()
+                        .get(0)
+                        .getPhysicalVertexList()
+                        .get(0)
+                        .getTaskGroupImmutableInformation()
+                        .getTasksData()
+                        .size(),
+                2);
+        Assertions.assertEquals(
+                physicalPlan
+                        .getPipelineList()
+                        .get(0)
+                        .getPhysicalVertexList()
+                        .get(0)
+                        .getTaskGroupImmutableInformation()
+                        .getJars()
+                        .get(0),
+                Sets.newHashSet(new URL("file:///fake.jar")));
+        Assertions.assertEquals(
+                physicalPlan
+                        .getPipelineList()
+                        .get(0)
+                        .getPhysicalVertexList()
+                        .get(0)
+                        .getTaskGroupImmutableInformation()
+                        .getJars()
+                        .get(1),
+                Sets.newHashSet(new URL("file:///console.jar")));
     }
 
     private static FakeSource createFakeSource() {
@@ -165,8 +223,6 @@ public class TaskTest extends AbstractSeaTunnelServerTest {
                                 "schema",
                                 Collections.singletonMap(
                                         "fields", ImmutableMap.of("id", "int", "name", "string"))));
-        FakeSource fakeSource = new FakeSource(ReadonlyConfig.fromConfig(fakeSourceConfig));
-        fakeSource.prepare(fakeSourceConfig);
-        return fakeSource;
+        return new FakeSource(ReadonlyConfig.fromConfig(fakeSourceConfig));
     }
 }

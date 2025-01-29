@@ -20,30 +20,27 @@ package org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.sqlserver;
 
 import org.apache.seatunnel.api.table.catalog.CatalogTable;
 import org.apache.seatunnel.api.table.catalog.Column;
-import org.apache.seatunnel.api.table.catalog.PhysicalColumn;
 import org.apache.seatunnel.api.table.catalog.TablePath;
 import org.apache.seatunnel.api.table.catalog.exception.CatalogException;
-import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
+import org.apache.seatunnel.api.table.converter.BasicTypeDefine;
 import org.apache.seatunnel.common.utils.JdbcUrlUtil;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.AbstractJdbcCatalog;
+import org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.utils.CatalogUtils;
+import org.apache.seatunnel.connectors.seatunnel.jdbc.internal.dialect.sqlserver.SqlServerTypeConverter;
+import org.apache.seatunnel.connectors.seatunnel.jdbc.internal.dialect.sqlserver.SqlserverTypeMapper;
 
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.lang3.tuple.Pair;
 
 import lombok.extern.slf4j.Slf4j;
 
+import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.HashMap;
-import java.util.Map;
 
 @Slf4j
 public class SqlServerCatalog extends AbstractJdbcCatalog {
 
-    private static final SqlServerDataTypeConvertor DATA_TYPE_CONVERTOR =
-            new SqlServerDataTypeConvertor();
-
-    private static final String SELECT_COLUMNS_SQL_TEMPLATE =
+    public static final String SELECT_COLUMNS_SQL_TEMPLATE =
             "SELECT tbl.name AS table_name,\n"
                     + "       col.name AS column_name,\n"
                     + "       ext.value AS comment,\n"
@@ -56,7 +53,7 @@ public class SqlServerCatalog extends AbstractJdbcCatalog {
                     + "       def.definition AS default_value\n"
                     + "FROM sys.tables tbl\n"
                     + "    INNER JOIN sys.columns col ON tbl.object_id = col.object_id\n"
-                    + "    LEFT JOIN sys.types types ON col.user_type_id = types.user_type_id\n"
+                    + "    LEFT JOIN sys.types types ON col.system_type_id = types.user_type_id\n"
                     + "    LEFT JOIN sys.extended_properties ext ON ext.major_id = col.object_id AND ext.minor_id = col.column_id\n"
                     + "    LEFT JOIN sys.default_constraints def ON col.default_object_id = def.object_id AND ext.minor_id = col.column_id AND ext.name = 'MS_Description'\n"
                     + "WHERE schema_name(tbl.schema_id) = '%s' %s\n"
@@ -69,6 +66,20 @@ public class SqlServerCatalog extends AbstractJdbcCatalog {
             JdbcUrlUtil.UrlInfo urlInfo,
             String defaultSchema) {
         super(catalogName, username, pwd, urlInfo, defaultSchema);
+    }
+
+    @Override
+    protected String getDatabaseWithConditionSql(String databaseName) {
+        return String.format(getListDatabaseSql() + "  where name = '%s'", databaseName);
+    }
+
+    @Override
+    protected String getTableWithConditionSql(TablePath tablePath) {
+        return String.format(
+                getListTableSql(tablePath.getDatabaseName())
+                        + "  and  TABLE_SCHEMA = '%s' and TABLE_NAME = '%s'",
+                tablePath.getSchemaName(),
+                tablePath.getTableName());
     }
 
     @Override
@@ -96,95 +107,33 @@ public class SqlServerCatalog extends AbstractJdbcCatalog {
     @Override
     protected Column buildColumn(ResultSet resultSet) throws SQLException {
         String columnName = resultSet.getString("column_name");
-        String sourceType = resultSet.getString("type");
-        //        String typeName = resultSet.getString("DATA_TYPE").toUpperCase();
+        String dataType = resultSet.getString("type");
         int precision = resultSet.getInt("precision");
         int scale = resultSet.getInt("scale");
         long columnLength = resultSet.getLong("max_length");
-        SeaTunnelDataType<?> type = fromJdbcType(sourceType, precision, scale);
         String comment = resultSet.getString("comment");
         Object defaultValue = resultSet.getObject("default_value");
-        if (defaultValue != null) {
-            defaultValue =
-                    defaultValue.toString().replace("(", "").replace("'", "").replace(")", "");
-        }
         boolean isNullable = resultSet.getBoolean("is_nullable");
-        long bitLen = 0;
-        StringBuilder sb = new StringBuilder(sourceType);
-        Pair<SqlServerType, Map<String, Object>> parse = SqlServerType.parse(sourceType);
-        switch (parse.getLeft()) {
-            case BINARY:
-            case VARBINARY:
-                // Uniform conversion to bits
-                if (columnLength != -1) {
-                    bitLen = columnLength * 4 * 8;
-                    sourceType = sb.append("(").append(columnLength).append(")").toString();
-                } else {
-                    sourceType = sb.append("(").append("max").append(")").toString();
-                    bitLen = columnLength;
-                }
-                break;
-            case TIMESTAMP:
-                bitLen = columnLength << 3;
-                break;
-            case VARCHAR:
-            case NCHAR:
-            case NVARCHAR:
-            case CHAR:
-                if (columnLength != -1) {
-                    sourceType = sb.append("(").append(columnLength).append(")").toString();
-                } else {
-                    sourceType = sb.append("(").append("max").append(")").toString();
-                }
-                break;
-            case DECIMAL:
-            case NUMERIC:
-                sourceType =
-                        sb.append("(")
-                                .append(precision)
-                                .append(",")
-                                .append(scale)
-                                .append(")")
-                                .toString();
-                break;
-            case TEXT:
-                columnLength = Integer.MAX_VALUE;
-                break;
-            case NTEXT:
-                columnLength = Integer.MAX_VALUE >> 1;
-                break;
-            case IMAGE:
-                bitLen = Integer.MAX_VALUE * 8L;
-                break;
-            default:
-                break;
-        }
-        return PhysicalColumn.of(
-                columnName,
-                type,
-                0,
-                isNullable,
-                defaultValue,
-                comment,
-                sourceType,
-                false,
-                false,
-                bitLen,
-                null,
-                columnLength);
-    }
 
-    private SeaTunnelDataType<?> fromJdbcType(String typeName, int precision, int scale) {
-        Pair<SqlServerType, Map<String, Object>> pair = SqlServerType.parse(typeName);
-        Map<String, Object> dataTypeProperties = new HashMap<>();
-        dataTypeProperties.put(SqlServerDataTypeConvertor.PRECISION, precision);
-        dataTypeProperties.put(SqlServerDataTypeConvertor.SCALE, scale);
-        return DATA_TYPE_CONVERTOR.toSeaTunnelType(pair.getLeft(), dataTypeProperties);
+        BasicTypeDefine typeDefine =
+                BasicTypeDefine.builder()
+                        .name(columnName)
+                        .dataType(dataType)
+                        .length(columnLength)
+                        .precision((long) precision)
+                        .scale(scale)
+                        .nullable(isNullable)
+                        .defaultValue(defaultValue)
+                        .comment(comment)
+                        .build();
+        return SqlServerTypeConverter.INSTANCE.convert(typeDefine);
     }
 
     @Override
-    protected String getCreateTableSql(TablePath tablePath, CatalogTable table) {
-        return SqlServerCreateTableSqlBuilder.builder(tablePath, table).build(tablePath, table);
+    protected String getCreateTableSql(
+            TablePath tablePath, CatalogTable table, boolean createIndex) {
+        return SqlServerCreateTableSqlBuilder.builder(tablePath, table, createIndex)
+                .build(tablePath, table);
     }
 
     @Override
@@ -211,5 +160,21 @@ public class SqlServerCatalog extends AbstractJdbcCatalog {
     @Override
     protected String getUrlFromDatabaseName(String databaseName) {
         return baseUrl + ";databaseName=" + databaseName + ";" + suffix;
+    }
+
+    @Override
+    public CatalogTable getTable(String sqlQuery) throws SQLException {
+        Connection defaultConnection = getConnection(defaultUrl);
+        return CatalogUtils.getCatalogTable(defaultConnection, sqlQuery, new SqlserverTypeMapper());
+    }
+
+    @Override
+    public String getExistDataSql(TablePath tablePath) {
+        return String.format("select TOP 1 * from %s ;", tablePath.getFullNameWithQuoted("[", "]"));
+    }
+
+    @Override
+    protected String getTruncateTableSql(TablePath tablePath) throws CatalogException {
+        return String.format("TRUNCATE TABLE  %s", tablePath.getFullNameWithQuoted("[", "]"));
     }
 }

@@ -24,20 +24,32 @@ import org.apache.seatunnel.shade.com.fasterxml.jackson.databind.node.ObjectNode
 
 import org.apache.seatunnel.api.common.metrics.JobMetrics;
 import org.apache.seatunnel.engine.common.exception.SeaTunnelEngineException;
+import org.apache.seatunnel.engine.core.job.ExecutionAddress;
 import org.apache.seatunnel.engine.core.job.JobDAGInfo;
+import org.apache.seatunnel.engine.core.job.JobImmutableInformation;
 import org.apache.seatunnel.engine.core.job.JobStatus;
 import org.apache.seatunnel.engine.core.job.JobStatusData;
 import org.apache.seatunnel.engine.core.job.PipelineStatus;
 import org.apache.seatunnel.engine.server.dag.physical.PipelineLocation;
 import org.apache.seatunnel.engine.server.execution.ExecutionState;
+import org.apache.seatunnel.engine.server.execution.PendingSourceState;
 import org.apache.seatunnel.engine.server.execution.TaskGroupLocation;
+import org.apache.seatunnel.engine.server.telemetry.log.operation.CleanLogOperation;
+import org.apache.seatunnel.engine.server.utils.NodeEngineUtil;
 
+import com.hazelcast.cluster.Address;
+import com.hazelcast.core.EntryEvent;
 import com.hazelcast.logging.ILogger;
 import com.hazelcast.map.IMap;
+import com.hazelcast.map.listener.EntryExpiredListener;
+import com.hazelcast.spi.impl.NodeEngine;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.Getter;
+import scala.Tuple2;
 
 import java.io.Serializable;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -48,6 +60,9 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class JobHistoryService {
+
+    private final NodeEngine nodeEngine;
+
     /**
      * IMap key is one of jobId {@link
      * org.apache.seatunnel.engine.server.dag.physical.PipelineLocation} and {@link
@@ -69,6 +84,8 @@ public class JobHistoryService {
      */
     private final Map<Long, JobMaster> runningJobMasterMap;
 
+    private final Map<Long, Tuple2<PendingSourceState, JobMaster>> pendingJobMasterMap;
+
     /** finishedJobVertexInfoImap key is jobId and value is JobDAGInfo */
     private final IMap<Long, JobDAGInfo> finishedJobDAGInfoImap;
 
@@ -76,7 +93,7 @@ public class JobHistoryService {
      * finishedJobStateImap key is jobId and value is jobState(json) JobStateData Indicates the
      * status of the job, pipeline, and task
      */
-    private final IMap<Long, JobState> finishedJobStateImap;
+    @Getter private final IMap<Long, JobState> finishedJobStateImap;
 
     private final IMap<Long, JobMetrics> finishedJobMetricsImap;
 
@@ -85,34 +102,50 @@ public class JobHistoryService {
     private final int finishedJobExpireTime;
 
     public JobHistoryService(
+            NodeEngine nodeEngine,
             IMap<Object, Object> runningJobStateIMap,
             ILogger logger,
+            Map<Long, Tuple2<PendingSourceState, JobMaster>> pendingJobMasterMap,
             Map<Long, JobMaster> runningJobMasterMap,
             IMap<Long, JobState> finishedJobStateImap,
             IMap<Long, JobMetrics> finishedJobMetricsImap,
             IMap<Long, JobDAGInfo> finishedJobVertexInfoImap,
             int finishedJobExpireTime) {
+        this.nodeEngine = nodeEngine;
         this.runningJobStateIMap = runningJobStateIMap;
         this.logger = logger;
+        this.pendingJobMasterMap = pendingJobMasterMap;
         this.runningJobMasterMap = runningJobMasterMap;
         this.finishedJobStateImap = finishedJobStateImap;
         this.finishedJobMetricsImap = finishedJobMetricsImap;
         this.finishedJobDAGInfoImap = finishedJobVertexInfoImap;
+        this.finishedJobDAGInfoImap.addEntryListener(new JobInfoExpiredListener(), true);
         this.objectMapper = new ObjectMapper();
         this.objectMapper.configure(SerializationFeature.FAIL_ON_EMPTY_BEANS, false);
         this.finishedJobExpireTime = finishedJobExpireTime;
     }
 
-    // Gets the status of a running and completed job
+    // Gets the status of a running and completed job.
     public String listAllJob() {
+        List<JobStatusData> status = getJobStatusData();
+        try {
+            return objectMapper.writeValueAsString(status);
+        } catch (JsonProcessingException e) {
+            logger.severe("Failed to list all job", e);
+            throw new SeaTunnelEngineException(e);
+        }
+    }
+
+    public List<JobStatusData> getJobStatusData() {
         List<JobStatusData> status = new ArrayList<>();
-        Set<Long> runningJonIds =
+        final List<JobState> runningJobStateList =
                 runningJobMasterMap.values().stream()
-                        .map(master -> master.getJobImmutableInformation().getJobId())
-                        .collect(Collectors.toSet());
+                        .map(master -> toJobStateMapper(master, true))
+                        .collect(Collectors.toList());
+        Set<Long> runningJonIds =
+                runningJobStateList.stream().map(JobState::getJobId).collect(Collectors.toSet());
         Stream.concat(
-                        runningJobMasterMap.values().stream()
-                                .map(master -> toJobStateMapper(master, true)),
+                        runningJobStateList.stream(),
                         finishedJobStateImap.values().stream()
                                 .filter(jobState -> !runningJonIds.contains(jobState.getJobId())))
                 .forEach(
@@ -126,23 +159,31 @@ public class JobHistoryService {
                                             jobState.getFinishTime());
                             status.add(jobStatusData);
                         });
-        try {
-            return objectMapper.writeValueAsString(status);
-        } catch (JsonProcessingException e) {
-            logger.severe("Failed to list all job", e);
-            throw new SeaTunnelEngineException(e);
-        }
+        return status;
     }
 
     // Get detailed status of a single job
     public JobState getJobDetailState(Long jobId) {
+        if (pendingJobMasterMap.containsKey(jobId)) {
+            // return pending job state
+            JobImmutableInformation jobImmutableInformation =
+                    pendingJobMasterMap.get(jobId)._2.getJobImmutableInformation();
+            return new JobState(
+                    jobId,
+                    jobImmutableInformation.getJobName(),
+                    JobStatus.PENDING,
+                    jobImmutableInformation.getCreateTime(),
+                    null,
+                    null,
+                    null);
+        }
         return runningJobMasterMap.containsKey(jobId)
                 ? toJobStateMapper(runningJobMasterMap.get(jobId), false)
                 : finishedJobStateImap.getOrDefault(jobId, null);
     }
 
     public JobMetrics getJobMetrics(Long jobId) {
-        return finishedJobMetricsImap.getOrDefault(jobId, null);
+        return finishedJobMetricsImap.getOrDefault(jobId, JobMetrics.empty());
     }
 
     public JobDAGInfo getJobDAGInfo(Long jobId) {
@@ -259,5 +300,38 @@ public class JobHistoryService {
         private static final long serialVersionUID = -7875004875757861958L;
         private PipelineStatus pipelineStatus;
         private Map<TaskGroupLocation, ExecutionState> executionStateMap;
+    }
+
+    private class JobInfoExpiredListener implements EntryExpiredListener<Long, JobDAGInfo> {
+        @Override
+        public void entryExpired(EntryEvent<Long, JobDAGInfo> event) {
+            Long jobId = event.getKey();
+            JobDAGInfo jobDagInfo = event.getOldValue();
+            try {
+                Set<ExecutionAddress> historyExecutionPlan = jobDagInfo.getHistoryExecutionPlan();
+                Stream.concat(historyExecutionPlan.stream(), Stream.of(jobDagInfo.getMaster()))
+                        .forEach(
+                                address -> {
+                                    logger.info(
+                                            "clean job log, jobId: "
+                                                    + jobId
+                                                    + ", address: "
+                                                    + address);
+                                    try {
+                                        NodeEngineUtil.sendOperationToMemberNode(
+                                                        nodeEngine,
+                                                        new CleanLogOperation(jobId),
+                                                        new Address(
+                                                                address.getHostname(),
+                                                                address.getPort()))
+                                                .join();
+                                    } catch (UnknownHostException e) {
+                                        throw new RuntimeException(e);
+                                    }
+                                });
+            } catch (Exception e) {
+                logger.warning("clean job log err", e);
+            }
+        }
     }
 }

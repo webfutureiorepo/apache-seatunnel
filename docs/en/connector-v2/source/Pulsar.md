@@ -136,7 +136,7 @@ Data format. The default format is json, reference [formats](../formats).
 
 ### common options
 
-Source plugin common parameters, please refer to [Source Common Options](common-options.md) for details.
+Source plugin common parameters, please refer to [Source Common Options](../source-common-options.md) for details.
 
 ## Example
 
@@ -147,7 +147,7 @@ source {
   	subscription.name = "seatunnel"
     client.service-url = "pulsar://localhost:6650"
     admin.service-url = "http://my-broker.example.com:8080"
-    result_table_name = "test"
+    plugin_output = "test"
   }
 }
 ```

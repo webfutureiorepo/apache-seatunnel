@@ -17,60 +17,51 @@
 
 package org.apache.seatunnel.e2e.connector.doris;
 
-import org.apache.seatunnel.e2e.common.TestResource;
-import org.apache.seatunnel.e2e.common.TestSuiteBase;
+import org.apache.seatunnel.connectors.seatunnel.cdc.mysql.testutils.MySqlContainer;
+import org.apache.seatunnel.connectors.seatunnel.cdc.mysql.testutils.MySqlVersion;
+import org.apache.seatunnel.connectors.seatunnel.cdc.mysql.testutils.UniqueDatabase;
+import org.apache.seatunnel.e2e.common.container.ContainerExtendedFactory;
+import org.apache.seatunnel.e2e.common.container.EngineType;
 import org.apache.seatunnel.e2e.common.container.TestContainer;
+import org.apache.seatunnel.e2e.common.junit.DisabledOnContainer;
+import org.apache.seatunnel.e2e.common.junit.TestContainerExtension;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.TestTemplate;
 import org.testcontainers.containers.Container;
-import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.output.Slf4jLogConsumer;
 import org.testcontainers.lifecycle.Startables;
 import org.testcontainers.utility.DockerLoggerFactory;
 
-import com.google.common.collect.Lists;
 import lombok.extern.slf4j.Slf4j;
 
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.net.URLClassLoader;
 import java.sql.Connection;
-import java.sql.Driver;
+import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static org.awaitility.Awaitility.given;
+import static org.awaitility.Awaitility.await;
 
 @Slf4j
-@Disabled
-public class DorisCDCSinkIT extends TestSuiteBase implements TestResource {
-    private static final String DOCKER_IMAGE = "zykkk/doris:1.2.2.1-avx2-x86_84";
-    private static final String DRIVER_CLASS = "com.mysql.cj.jdbc.Driver";
-    private static final String HOST = "doris_cdc_e2e";
-    private static final int DOCKER_PORT = 9030;
-    private static final int PORT = 8961;
-    private static final String URL = "jdbc:mysql://%s:" + PORT;
-    private static final String USERNAME = "root";
-    private static final String PASSWORD = "";
+@DisabledOnContainer(
+        value = {},
+        type = {EngineType.SPARK},
+        disabledReason = "Currently SPARK do not support cdc")
+public class DorisCDCSinkIT extends AbstractDorisIT {
+
     private static final String DATABASE = "test";
     private static final String SINK_TABLE = "e2e_table_sink";
-    private static final String DRIVER_JAR =
-            "https://repo1.maven.org/maven2/mysql/mysql-connector-java/8.0.16/mysql-connector-java-8.0.16.jar";
-    private static final String SET_SQL =
-            "ADMIN SET FRONTEND CONFIG (\"enable_batch_delete_by_default\" = \"true\")";
     private static final String CREATE_DATABASE = "CREATE DATABASE IF NOT EXISTS " + DATABASE;
     private static final String DDL_SINK =
             "CREATE TABLE IF NOT EXISTS "
@@ -88,81 +79,128 @@ public class DorisCDCSinkIT extends TestSuiteBase implements TestResource {
                     + "\"replication_allocation\" = \"tag.location.default: 1\""
                     + ")";
 
-    private Connection jdbcConnection;
-    private GenericContainer<?> dorisServer;
+    // mysql
+    private static final String MYSQL_HOST = "mysql_cdc_e2e";
+    private static final String MYSQL_USER_NAME = "mysqluser";
+    private static final String MYSQL_USER_PASSWORD = "mysqlpw";
+    private static final String MYSQL_DATABASE = "mysql_cdc";
+    private static final MySqlContainer MYSQL_CONTAINER = createMySqlContainer(MySqlVersion.V8_0);
+    private static final String SOURCE_TABLE = "mysql_cdc_e2e_source_table";
+
+    @TestContainerExtension
+    protected final ContainerExtendedFactory extendedFactory =
+            container -> {
+                Container.ExecResult extraCommands =
+                        container.execInContainer(
+                                "bash",
+                                "-c",
+                                "mkdir -p /tmp/seatunnel/plugins/Doris-CDC/lib && cd /tmp/seatunnel/plugins/Doris-CDC/lib && wget "
+                                        + driverUrl());
+                Assertions.assertEquals(0, extraCommands.getExitCode(), extraCommands.getStderr());
+            };
+
+    private final UniqueDatabase inventoryDatabase =
+            new UniqueDatabase(
+                    MYSQL_CONTAINER, MYSQL_DATABASE, "mysqluser", "mysqlpw", MYSQL_DATABASE);
+
+    private static MySqlContainer createMySqlContainer(MySqlVersion version) {
+        return new MySqlContainer(version)
+                .withConfigurationOverride("docker/server-gtids/my.cnf")
+                .withSetupSQL("docker/setup.sql")
+                .withNetwork(NETWORK)
+                .withNetworkAliases(MYSQL_HOST)
+                .withDatabaseName(MYSQL_DATABASE)
+                .withUsername(MYSQL_USER_NAME)
+                .withPassword(MYSQL_USER_PASSWORD)
+                .withLogConsumer(
+                        new Slf4jLogConsumer(DockerLoggerFactory.getLogger("mysql-docker-image")));
+    }
+
+    private String driverUrl() {
+        return "https://repo1.maven.org/maven2/com/mysql/mysql-connector-j/8.0.32/mysql-connector-j-8.0.32.jar";
+    }
 
     @BeforeAll
-    @Override
-    public void startUp() {
-        dorisServer =
-                new GenericContainer<>(DOCKER_IMAGE)
-                        .withNetwork(NETWORK)
-                        .withNetworkAliases(HOST)
-                        .withPrivilegedMode(true)
-                        .withLogConsumer(
-                                new Slf4jLogConsumer(DockerLoggerFactory.getLogger(DOCKER_IMAGE)));
-        dorisServer.setPortBindings(Lists.newArrayList(String.format("%s:%s", PORT, DOCKER_PORT)));
-        Startables.deepStart(Stream.of(dorisServer)).join();
-        log.info("doris container started");
-        // wait for doris fully start
-        given().ignoreExceptions()
-                .await()
-                .atMost(10000, TimeUnit.SECONDS)
-                .untilAsserted(this::initializeJdbcConnection);
+    public void init() {
+        log.info("The second stage: Starting Mysql containers...");
+        Startables.deepStart(Stream.of(MYSQL_CONTAINER)).join();
+        log.info("Mysql Containers are started");
+        inventoryDatabase.createAndInitialize();
+        log.info("Mysql ddl execution is complete");
         initializeJdbcTable();
     }
 
     @AfterAll
-    @Override
-    public void tearDown() throws Exception {
-        if (jdbcConnection != null) {
-            jdbcConnection.close();
-        }
-        if (dorisServer != null) {
-            dorisServer.close();
+    public void close() {
+        if (MYSQL_CONTAINER != null) {
+            MYSQL_CONTAINER.close();
         }
     }
 
     @TestTemplate
-    public void testDorisSink(TestContainer container) throws Exception {
-        Container.ExecResult execResult =
-                container.executeJob("/write-cdc-changelog-to-doris.conf");
-        Assertions.assertEquals(0, execResult.getExitCode());
+    public void testDorisCDCSink(TestContainer container) throws Exception {
+
+        clearTable(DATABASE, SINK_TABLE);
+        CompletableFuture.supplyAsync(
+                () -> {
+                    try {
+                        container.executeJob("/write-cdc-changelog-to-doris.conf");
+                    } catch (Exception e) {
+                        log.error("Commit task exception :" + e.getMessage());
+                        throw new RuntimeException(e);
+                    }
+                    return null;
+                });
 
         String sinkSql = String.format("select * from %s.%s", DATABASE, SINK_TABLE);
-        Set<List<Object>> actual = new HashSet<>();
-        try (Statement sinkStatement = jdbcConnection.createStatement()) {
-            ResultSet sinkResultSet = sinkStatement.executeQuery(sinkSql);
-            while (sinkResultSet.next()) {
-                List<Object> row =
-                        Arrays.asList(
-                                sinkResultSet.getLong("uuid"),
-                                sinkResultSet.getString("name"),
-                                sinkResultSet.getInt("score"));
-                actual.add(row);
-            }
-        }
-        Set<List<Object>> expected =
-                Stream.<List<Object>>of(Arrays.asList(1L, "A_1", 100), Arrays.asList(3L, "C", 100))
-                        .collect(Collectors.toSet());
-        Assertions.assertIterableEquals(expected, actual);
-    }
 
-    private void initializeJdbcConnection()
-            throws SQLException, ClassNotFoundException, InstantiationException,
-                    IllegalAccessException, MalformedURLException {
-        URLClassLoader urlClassLoader =
-                new URLClassLoader(
-                        new URL[] {new URL(DRIVER_JAR)}, DorisCDCSinkIT.class.getClassLoader());
-        Thread.currentThread().setContextClassLoader(urlClassLoader);
-        Driver driver = (Driver) urlClassLoader.loadClass(DRIVER_CLASS).newInstance();
-        Properties props = new Properties();
-        props.put("user", USERNAME);
-        props.put("password", PASSWORD);
-        jdbcConnection = driver.connect(String.format(URL, dorisServer.getHost()), props);
-        try (Statement statement = jdbcConnection.createStatement()) {
-            statement.execute(SET_SQL);
-        }
+        Set<List<Object>> expected =
+                Stream.<List<Object>>of(
+                                Arrays.asList(1L, "Alice", 95), Arrays.asList(2L, "Bob", 88))
+                        .collect(Collectors.toSet());
+
+        await().atMost(60000, TimeUnit.MILLISECONDS)
+                .untilAsserted(
+                        () -> {
+                            Set<List<Object>> actual = new HashSet<>();
+                            try (Statement sinkStatement = jdbcConnection.createStatement();
+                                    ResultSet sinkResultSet = sinkStatement.executeQuery(sinkSql)) {
+                                while (sinkResultSet.next()) {
+                                    List<Object> row =
+                                            Arrays.asList(
+                                                    sinkResultSet.getLong("uuid"),
+                                                    sinkResultSet.getString("name"),
+                                                    sinkResultSet.getInt("score"));
+                                    actual.add(row);
+                                }
+                            }
+                            Assertions.assertIterableEquals(expected, actual);
+                        });
+
+        executeSql("DELETE FROM " + MYSQL_DATABASE + "." + SOURCE_TABLE + " WHERE uuid = 1");
+
+        Set<List<Object>> expectedAfterDelete =
+                Stream.<List<Object>>of(Arrays.asList(2L, "Bob", 88)).collect(Collectors.toSet());
+
+        await().atMost(60000, TimeUnit.MILLISECONDS)
+                .untilAsserted(
+                        () -> {
+                            Set<List<Object>> actual = new HashSet<>();
+                            try (Statement sinkStatement = jdbcConnection.createStatement();
+                                    ResultSet sinkResultSet = sinkStatement.executeQuery(sinkSql)) {
+                                while (sinkResultSet.next()) {
+                                    List<Object> row =
+                                            Arrays.asList(
+                                                    sinkResultSet.getLong("uuid"),
+                                                    sinkResultSet.getString("name"),
+                                                    sinkResultSet.getInt("score"));
+                                    actual.add(row);
+                                }
+                            }
+                            Assertions.assertIterableEquals(expectedAfterDelete, actual);
+                        });
+        executeSql(
+                "INSERT INTO " + MYSQL_DATABASE + "." + SOURCE_TABLE + " VALUES (1, 'Alice', 95)");
     }
 
     private void initializeJdbcTable() {
@@ -174,5 +212,33 @@ public class DorisCDCSinkIT extends TestSuiteBase implements TestResource {
         } catch (SQLException e) {
             throw new RuntimeException("Initializing table failed!", e);
         }
+    }
+
+    private void executeDorisSql(String sql) {
+        try (Statement statement = jdbcConnection.createStatement()) {
+            statement.execute(sql);
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private Connection getJdbcConnection() throws SQLException {
+        return DriverManager.getConnection(
+                MYSQL_CONTAINER.getJdbcUrl(),
+                MYSQL_CONTAINER.getUsername(),
+                MYSQL_CONTAINER.getPassword());
+    }
+
+    // Execute SQL
+    private void executeSql(String sql) {
+        try (Connection connection = getJdbcConnection()) {
+            connection.createStatement().execute(sql);
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private void clearTable(String database, String tableName) {
+        executeDorisSql("truncate table " + database + "." + tableName);
     }
 }

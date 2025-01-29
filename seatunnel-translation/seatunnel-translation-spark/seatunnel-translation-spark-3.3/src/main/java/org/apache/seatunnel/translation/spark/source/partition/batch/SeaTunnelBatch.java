@@ -20,10 +20,13 @@ package org.apache.seatunnel.translation.spark.source.partition.batch;
 import org.apache.seatunnel.api.source.SeaTunnelSource;
 import org.apache.seatunnel.api.source.SupportCoordinate;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
+import org.apache.seatunnel.translation.spark.execution.MultiTableManager;
 
 import org.apache.spark.sql.connector.read.Batch;
 import org.apache.spark.sql.connector.read.InputPartition;
 import org.apache.spark.sql.connector.read.PartitionReaderFactory;
+
+import java.util.Map;
 
 /** A physical plan of SeaTunnel source */
 public class SeaTunnelBatch implements Batch {
@@ -31,10 +34,22 @@ public class SeaTunnelBatch implements Batch {
     private final SeaTunnelSource<SeaTunnelRow, ?, ?> source;
 
     private final int parallelism;
+    private final String jobId;
+    private final Map<String, String> envOptions;
 
-    public SeaTunnelBatch(SeaTunnelSource<SeaTunnelRow, ?, ?> source, int parallelism) {
+    private final MultiTableManager multiTableManager;
+
+    public SeaTunnelBatch(
+            SeaTunnelSource<SeaTunnelRow, ?, ?> source,
+            int parallelism,
+            String jobId,
+            Map<String, String> envOptions,
+            MultiTableManager multiTableManager) {
         this.source = source;
         this.parallelism = parallelism;
+        this.jobId = jobId;
+        this.envOptions = envOptions;
+        this.multiTableManager = multiTableManager;
     }
 
     @Override
@@ -54,6 +69,7 @@ public class SeaTunnelBatch implements Batch {
 
     @Override
     public PartitionReaderFactory createReaderFactory() {
-        return new SeaTunnelBatchPartitionReaderFactory(source, parallelism);
+        return new SeaTunnelBatchPartitionReaderFactory(
+                source, parallelism, jobId, envOptions, multiTableManager);
     }
 }

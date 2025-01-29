@@ -67,12 +67,22 @@
         <module>connector-rabbitmq</module>
         <module>connector-openmldb</module>
         <module>connector-doris</module>
+        <module>connector-druid</module>
         <module>connector-maxcompute</module>
         <module>connector-tdengine</module>
         <module>connector-selectdb-cloud</module>
         <module>connector-hbase</module>
         <module>connector-rocketmq</module>
+        <module>connector-amazonsqs</module>
         <module>connector-paimon</module>
+        <module>connector-easysearch</module>
+        <module>connector-web3j</module>
+        <module>connector-milvus</module>
+        <module>connector-activemq</module>
+        <module>connector-prometheus</module>
+        <module>connector-qdrant</module>
+        <module>connector-sls</module>
+        <module>connector-typesense</module>
     </modules>
 
     <dependencyManagement>

@@ -17,6 +17,9 @@
 
 package org.apache.seatunnel.engine.server.task;
 
+import org.apache.seatunnel.engine.core.job.ConnectorJarIdentifier;
+import org.apache.seatunnel.engine.server.execution.TaskGroupLocation;
+import org.apache.seatunnel.engine.server.execution.TaskGroupType;
 import org.apache.seatunnel.engine.server.serializable.TaskDataSerializerHook;
 
 import com.hazelcast.internal.nio.IOUtil;
@@ -28,17 +31,38 @@ import lombok.AllArgsConstructor;
 
 import java.io.IOException;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 
 @lombok.Data
 @AllArgsConstructor
 public class TaskGroupImmutableInformation implements IdentifiedDataSerializable {
+    private long jobId;
     // Each deployment generates a new executionId
     private long executionId;
 
-    private Data group;
+    private TaskGroupType taskGroupType;
 
-    private Set<URL> jars;
+    private TaskGroupLocation taskGroupLocation;
+
+    private String taskGroupName;
+
+    private List<Data> tasksData;
+
+    private List<Set<URL>> jars;
+
+    // Set<URL> pluginJarsUrls is a collection of paths stored on the engine for all connector Jar
+    // packages and third-party Jar packages that the connector relies on.
+    // All storage paths come from the unique identifier obtained after uploading the Jar package
+    // through the client.
+    // Set<ConnectorJarIdentifier> represents the set of the unique identifier of a Jar package
+    // file,
+    // which contains more information about the Jar package file, including the name of the
+    // connector plugin using the current Jar, the type of the current Jar package, and so on.
+    // TODO: Only use Set<ConnectorJarIdentifier>to save more information about the Jar package,
+    // including the storage path of the Jar package on the server.
+    private List<Set<ConnectorJarIdentifier>> connectorJarIdentifiers;
 
     public TaskGroupImmutableInformation() {}
 
@@ -54,15 +78,32 @@ public class TaskGroupImmutableInformation implements IdentifiedDataSerializable
 
     @Override
     public void writeData(ObjectDataOutput out) throws IOException {
+        out.writeLong(jobId);
         out.writeLong(executionId);
+        out.writeObject(taskGroupType);
         out.writeObject(jars);
-        IOUtil.writeData(out, group);
+        out.writeObject(connectorJarIdentifiers);
+        out.writeInt(tasksData.size());
+        for (Data data : tasksData) {
+            IOUtil.writeData(out, data);
+        }
+        out.writeObject(taskGroupLocation);
+        out.writeString(taskGroupName);
     }
 
     @Override
     public void readData(ObjectDataInput in) throws IOException {
+        jobId = in.readLong();
         executionId = in.readLong();
+        taskGroupType = in.readObject();
         jars = in.readObject();
-        group = IOUtil.readData(in);
+        connectorJarIdentifiers = in.readObject();
+        int size = in.readInt();
+        tasksData = new ArrayList<>(size);
+        for (int i = 0; i < size; i++) {
+            tasksData.add(IOUtil.readData(in));
+        }
+        taskGroupLocation = in.readObject();
+        taskGroupName = in.readString();
     }
 }

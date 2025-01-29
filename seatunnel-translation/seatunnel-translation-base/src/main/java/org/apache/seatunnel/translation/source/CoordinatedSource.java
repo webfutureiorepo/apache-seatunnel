@@ -24,6 +24,10 @@ import org.apache.seatunnel.api.source.SourceEvent;
 import org.apache.seatunnel.api.source.SourceReader;
 import org.apache.seatunnel.api.source.SourceSplit;
 import org.apache.seatunnel.api.source.SourceSplitEnumerator;
+import org.apache.seatunnel.api.source.event.EnumeratorCloseEvent;
+import org.apache.seatunnel.api.source.event.EnumeratorOpenEvent;
+import org.apache.seatunnel.api.source.event.ReaderCloseEvent;
+import org.apache.seatunnel.api.source.event.ReaderOpenEvent;
 import org.apache.seatunnel.translation.util.ThreadPoolExecutorFactory;
 
 import lombok.extern.slf4j.Slf4j;
@@ -49,6 +53,7 @@ public class CoordinatedSource<T, SplitT extends SourceSplit, StateT extends Ser
     protected final SeaTunnelSource<T, SplitT, StateT> source;
     protected final Map<Integer, List<byte[]>> restoredState;
     protected final Integer parallelism;
+    protected final String jobId;
 
     protected final Serializer<SplitT> splitSerializer;
     protected final Serializer<StateT> enumeratorStateSerializer;
@@ -69,14 +74,16 @@ public class CoordinatedSource<T, SplitT extends SourceSplit, StateT extends Ser
     public CoordinatedSource(
             SeaTunnelSource<T, SplitT, StateT> source,
             Map<Integer, List<byte[]>> restoredState,
-            int parallelism) {
+            int parallelism,
+            String jobId) {
         this.source = source;
         this.restoredState = restoredState;
         this.parallelism = parallelism;
+        this.jobId = jobId;
         this.splitSerializer = source.getSplitSerializer();
         this.enumeratorStateSerializer = source.getEnumeratorStateSerializer();
 
-        this.coordinatedEnumeratorContext = new CoordinatedEnumeratorContext<>(this);
+        this.coordinatedEnumeratorContext = new CoordinatedEnumeratorContext<>(this, jobId);
         this.readerContextMap = new ConcurrentHashMap<>(parallelism);
         this.readerRunningMap = new ConcurrentHashMap<>(parallelism);
         try {
@@ -119,7 +126,7 @@ public class CoordinatedSource<T, SplitT extends SourceSplit, StateT extends Ser
     private void createReaders() throws Exception {
         for (int subtaskId = 0; subtaskId < this.parallelism; subtaskId++) {
             CoordinatedReaderContext readerContext =
-                    new CoordinatedReaderContext(this, source.getBoundedness(), subtaskId);
+                    new CoordinatedReaderContext(this, source.getBoundedness(), jobId, subtaskId);
             readerContextMap.put(subtaskId, readerContext);
             readerRunningMap.put(subtaskId, new AtomicBoolean(true));
             SourceReader<T, SplitT> reader = source.createReader(readerContext);
@@ -133,6 +140,7 @@ public class CoordinatedSource<T, SplitT extends SourceSplit, StateT extends Ser
                 ThreadPoolExecutorFactory.createScheduledThreadPoolExecutor(
                         parallelism, "parallel-split-enumerator-executor");
         splitEnumerator.open();
+        coordinatedEnumeratorContext.getEventListener().onEvent(new EnumeratorOpenEvent());
         restoredSplitStateMap.forEach(
                 (subtaskId, splits) -> {
                     splitEnumerator.addSplitsBack(splits, subtaskId);
@@ -144,6 +152,10 @@ public class CoordinatedSource<T, SplitT extends SourceSplit, StateT extends Ser
                         entry -> {
                             try {
                                 entry.getValue().open();
+                                readerContextMap
+                                        .get(entry.getKey())
+                                        .getEventListener()
+                                        .onEvent(new ReaderOpenEvent());
                                 splitEnumerator.registerReader(entry.getKey());
                             } catch (Exception e) {
                                 throw new RuntimeException(e);
@@ -165,7 +177,20 @@ public class CoordinatedSource<T, SplitT extends SourceSplit, StateT extends Ser
                                         while (flag.get()) {
                                             try {
                                                 reader.pollNext(collector);
-                                                Thread.sleep(SLEEP_TIME_INTERVAL);
+                                                if (collector.isEmptyThisPollNext()) {
+                                                    Thread.sleep(100);
+                                                } else {
+                                                    collector.resetEmptyThisPollNext();
+                                                    /**
+                                                     * sleep(0) is used to prevent the current
+                                                     * thread from occupying CPU resources for a
+                                                     * long time, thus blocking the checkpoint
+                                                     * thread for a long time. It is mentioned in
+                                                     * this
+                                                     * https://github.com/apache/seatunnel/issues/5694
+                                                     */
+                                                    Thread.sleep(0L);
+                                                }
                                             } catch (Exception e) {
                                                 running = false;
                                                 flag.set(false);
@@ -187,6 +212,7 @@ public class CoordinatedSource<T, SplitT extends SourceSplit, StateT extends Ser
         for (Map.Entry<Integer, SourceReader<T, SplitT>> entry : readerMap.entrySet()) {
             readerRunningMap.get(entry.getKey()).set(false);
             entry.getValue().close();
+            readerContextMap.get(entry.getKey()).getEventListener().onEvent(new ReaderCloseEvent());
         }
 
         if (executorService != null) {
@@ -195,6 +221,7 @@ public class CoordinatedSource<T, SplitT extends SourceSplit, StateT extends Ser
 
         try (SourceSplitEnumerator<SplitT, StateT> closed = splitEnumerator) {
             // just close the resources
+            coordinatedEnumeratorContext.getEventListener().onEvent(new EnumeratorCloseEvent());
         }
     }
 

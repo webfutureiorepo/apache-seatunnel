@@ -21,7 +21,7 @@ import org.apache.seatunnel.api.serialization.SerializationSchema;
 import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
-import org.apache.seatunnel.common.exception.CommonErrorCode;
+import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.connectors.seatunnel.rocketmq.common.SchemaFormat;
 import org.apache.seatunnel.format.json.JsonSerializationSchema;
 import org.apache.seatunnel.format.json.exception.SeaTunnelJsonFormatException;
@@ -37,37 +37,44 @@ import java.util.function.Function;
 @Slf4j
 public class DefaultSeaTunnelRowSerializer implements SeaTunnelRowSerializer<byte[], byte[]> {
     private final String topic;
+    private final String tag;
     private final SerializationSchema keySerialization;
     private final SerializationSchema valueSerialization;
 
     public DefaultSeaTunnelRowSerializer(
             String topic,
+            String tag,
             SeaTunnelRowType seaTunnelRowType,
             SchemaFormat format,
             String delimiter) {
         this(
                 topic,
+                tag,
                 element -> null,
                 createSerializationSchema(seaTunnelRowType, format, delimiter));
     }
 
     public DefaultSeaTunnelRowSerializer(
             String topic,
+            String tag,
             List<String> keyFieldNames,
             SeaTunnelRowType seaTunnelRowType,
             SchemaFormat format,
             String delimiter) {
         this(
                 topic,
+                tag,
                 createKeySerializationSchema(keyFieldNames, seaTunnelRowType),
                 createSerializationSchema(seaTunnelRowType, format, delimiter));
     }
 
     public DefaultSeaTunnelRowSerializer(
             String topic,
+            String tag,
             SerializationSchema keySerialization,
             SerializationSchema valueSerialization) {
         this.topic = topic;
+        this.tag = tag;
         this.keySerialization = keySerialization;
         this.valueSerialization = valueSerialization;
     }
@@ -84,7 +91,8 @@ public class DefaultSeaTunnelRowSerializer implements SeaTunnelRowSerializer<byt
                 return new JsonSerializationSchema(rowType);
             default:
                 throw new SeaTunnelJsonFormatException(
-                        CommonErrorCode.UNSUPPORTED_DATA_TYPE, "Unsupported format: " + format);
+                        CommonErrorCodeDeprecated.UNSUPPORTED_DATA_TYPE,
+                        "Unsupported format: " + format);
         }
     }
 
@@ -122,6 +130,6 @@ public class DefaultSeaTunnelRowSerializer implements SeaTunnelRowSerializer<byt
             return null;
         }
         byte[] key = keySerialization.serialize(row);
-        return new Message(topic, null, key == null ? null : new String(key), value);
+        return new Message(topic, tag, key == null ? null : new String(key), value);
     }
 }

@@ -17,9 +17,16 @@
 
 package org.apache.seatunnel.connectors.seatunnel.elasticsearch.sink;
 
+import org.apache.seatunnel.api.configuration.ReadonlyConfig;
 import org.apache.seatunnel.api.configuration.util.OptionRule;
+import org.apache.seatunnel.api.sink.SinkCommonOptions;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
+import org.apache.seatunnel.api.table.catalog.TableIdentifier;
+import org.apache.seatunnel.api.table.connector.TableSink;
 import org.apache.seatunnel.api.table.factory.Factory;
 import org.apache.seatunnel.api.table.factory.TableSinkFactory;
+import org.apache.seatunnel.api.table.factory.TableSinkFactoryContext;
+import org.apache.seatunnel.connectors.seatunnel.elasticsearch.config.SinkConfig;
 
 import com.google.auto.service.AutoService;
 
@@ -49,7 +56,7 @@ public class ElasticsearchSinkFactory implements TableSinkFactory {
     @Override
     public OptionRule optionRule() {
         return OptionRule.builder()
-                .required(HOSTS, INDEX)
+                .required(HOSTS, INDEX, SinkConfig.SCHEMA_SAVE_MODE, SinkConfig.DATA_SAVE_MODE)
                 .optional(
                         INDEX_TYPE,
                         PRIMARY_KEYS,
@@ -63,7 +70,22 @@ public class ElasticsearchSinkFactory implements TableSinkFactory {
                         TLS_KEY_STORE_PATH,
                         TLS_KEY_STORE_PASSWORD,
                         TLS_TRUST_STORE_PATH,
-                        TLS_TRUST_STORE_PASSWORD)
+                        TLS_TRUST_STORE_PASSWORD,
+                        SinkCommonOptions.MULTI_TABLE_SINK_REPLICA)
                 .build();
+    }
+
+    @Override
+    public TableSink createSink(TableSinkFactoryContext context) {
+        ReadonlyConfig readonlyConfig = context.getOptions();
+        String original = readonlyConfig.get(INDEX);
+        CatalogTable newTable =
+                CatalogTable.of(
+                        TableIdentifier.of(
+                                context.getCatalogTable().getCatalogName(),
+                                context.getCatalogTable().getTablePath().getDatabaseName(),
+                                original),
+                        context.getCatalogTable());
+        return () -> new ElasticsearchSink(readonlyConfig, newTable);
     }
 }

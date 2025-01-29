@@ -17,19 +17,25 @@
 
 package org.apache.seatunnel.connectors.seatunnel.clickhouse.sink.file;
 
-import org.apache.seatunnel.common.exception.CommonErrorCode;
+import org.apache.seatunnel.common.exception.CommonError;
+import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.connectors.seatunnel.clickhouse.exception.ClickhouseConnectorErrorCode;
 import org.apache.seatunnel.connectors.seatunnel.clickhouse.exception.ClickhouseConnectorException;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.sshd.client.SshClient;
 import org.apache.sshd.client.session.ClientSession;
+import org.apache.sshd.common.keyprovider.FileKeyPairProvider;
+import org.apache.sshd.common.keyprovider.KeyPairProvider;
 import org.apache.sshd.scp.client.ScpClient;
 import org.apache.sshd.scp.client.ScpClientCreator;
 
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
+import java.nio.file.Paths;
+import java.security.GeneralSecurityException;
+import java.security.KeyPair;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -41,15 +47,17 @@ public class ScpFileTransfer implements FileTransfer {
     private final String host;
     private final String user;
     private final String password;
+    private final String keyPath;
 
     private ScpClient scpClient;
     private ClientSession clientSession;
     private SshClient sshClient;
 
-    public ScpFileTransfer(String host, String user, String password) {
+    public ScpFileTransfer(String host, String user, String password, String keyPath) {
         this.host = host;
         this.user = user;
         this.password = password;
+        this.keyPath = keyPath;
     }
 
     @Override
@@ -61,14 +69,20 @@ public class ScpFileTransfer implements FileTransfer {
             if (password != null) {
                 clientSession.addPasswordIdentity(password);
             }
-            // TODO support add publicKey to identity
+            if (keyPath != null) {
+                FileKeyPairProvider fileKeyPairProvider =
+                        new FileKeyPairProvider(Paths.get(keyPath));
+                KeyPair fileKeyPair =
+                        fileKeyPairProvider.loadKey(clientSession, KeyPairProvider.SSH_RSA);
+                clientSession.addPublicKeyIdentity(fileKeyPair);
+            }
             if (!clientSession.auth().verify().isSuccess()) {
                 throw new ClickhouseConnectorException(
                         ClickhouseConnectorErrorCode.SSH_OPERATION_FAILED,
                         "ssh host " + host + "authentication failed");
             }
             scpClient = ScpClientCreator.instance().createScpClient(clientSession);
-        } catch (IOException e) {
+        } catch (IOException | GeneralSecurityException e) {
             throw new ClickhouseConnectorException(
                     ClickhouseConnectorErrorCode.SSH_OPERATION_FAILED,
                     "Failed to connect to host: " + host + " by user: " + user + " on port 22",
@@ -86,10 +100,8 @@ public class ScpFileTransfer implements FileTransfer {
                     ScpClient.Option.TargetIsDirectory,
                     ScpClient.Option.PreserveAttributes);
         } catch (IOException e) {
-            throw new ClickhouseConnectorException(
-                    CommonErrorCode.FILE_OPERATION_FAILED,
-                    "Scp failed to transfer file: " + sourcePath + " to: " + targetPath,
-                    e);
+            throw CommonError.fileOperationFailed(
+                    "ClickhouseFile", "transfer", sourcePath + " -> " + targetPath, e);
         }
         // remote exec command to change file owner. Only file owner equal with server's clickhouse
         // user can
@@ -114,7 +126,7 @@ public class ScpFileTransfer implements FileTransfer {
     public void transferAndChown(List<String> sourcePaths, String targetPath) {
         if (sourcePaths == null) {
             throw new ClickhouseConnectorException(
-                    CommonErrorCode.ILLEGAL_ARGUMENT, "sourcePath is null");
+                    CommonErrorCodeDeprecated.ILLEGAL_ARGUMENT, "sourcePath is null");
         }
         sourcePaths.forEach(sourcePath -> transferAndChown(sourcePath, targetPath));
     }

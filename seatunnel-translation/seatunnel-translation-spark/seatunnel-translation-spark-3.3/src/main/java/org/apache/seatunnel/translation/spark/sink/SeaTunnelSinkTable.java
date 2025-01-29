@@ -17,12 +17,15 @@
 
 package org.apache.seatunnel.translation.spark.sink;
 
+import org.apache.seatunnel.shade.com.google.common.collect.Sets;
+
 import org.apache.seatunnel.api.sink.SeaTunnelSink;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.common.Constants;
 import org.apache.seatunnel.common.utils.SerializationUtils;
+import org.apache.seatunnel.translation.spark.execution.MultiTableManager;
 import org.apache.seatunnel.translation.spark.sink.write.SeaTunnelWriteBuilder;
-import org.apache.seatunnel.translation.spark.utils.TypeConverterUtils;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.spark.sql.connector.catalog.SupportsWrite;
@@ -32,9 +35,8 @@ import org.apache.spark.sql.connector.write.LogicalWriteInfo;
 import org.apache.spark.sql.connector.write.WriteBuilder;
 import org.apache.spark.sql.types.StructType;
 
-import com.google.common.collect.Sets;
-
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 public class SeaTunnelSinkTable implements Table, SupportsWrite {
@@ -45,18 +47,38 @@ public class SeaTunnelSinkTable implements Table, SupportsWrite {
 
     private final SeaTunnelSink<SeaTunnelRow, ?, ?, ?> sink;
 
+    private final CatalogTable[] catalogTables;
+    private final String jobId;
+    private final int parallelism;
+
     public SeaTunnelSinkTable(Map<String, String> properties) {
         this.properties = properties;
         String sinkSerialization = properties.getOrDefault(Constants.SINK_SERIALIZATION, "");
         if (StringUtils.isBlank(sinkSerialization)) {
-            throw new IllegalArgumentException("sink.serialization must be specified");
+            throw new IllegalArgumentException(Constants.SINK_SERIALIZATION + " must be specified");
         }
         this.sink = SerializationUtils.stringToObject(sinkSerialization);
+        String sinkCatalogTableSerialization =
+                properties.getOrDefault(SparkSinkInjector.SINK_CATALOG_TABLE, "");
+        if (StringUtils.isBlank(sinkCatalogTableSerialization)) {
+            throw new IllegalArgumentException(
+                    SparkSinkInjector.SINK_CATALOG_TABLE + " must be specified");
+        }
+        this.catalogTables = SerializationUtils.stringToObject(sinkCatalogTableSerialization);
+        this.jobId = properties.getOrDefault(SparkSinkInjector.JOB_ID, null);
+        this.parallelism =
+                Optional.of(properties.getOrDefault(SparkSinkInjector.PARALLELISM, null))
+                        .map(Integer::parseInt)
+                        .orElseThrow(
+                                () ->
+                                        new IllegalArgumentException(
+                                                SparkSinkInjector.PARALLELISM
+                                                        + " must be specified"));
     }
 
     @Override
     public WriteBuilder newWriteBuilder(LogicalWriteInfo info) {
-        return new SeaTunnelWriteBuilder<>(sink);
+        return new SeaTunnelWriteBuilder<>(sink, catalogTables, jobId, parallelism);
     }
 
     @Override
@@ -66,7 +88,7 @@ public class SeaTunnelSinkTable implements Table, SupportsWrite {
 
     @Override
     public StructType schema() {
-        return (StructType) TypeConverterUtils.convert(sink.getConsumedType());
+        return new MultiTableManager(catalogTables).getTableSchema();
     }
 
     @Override

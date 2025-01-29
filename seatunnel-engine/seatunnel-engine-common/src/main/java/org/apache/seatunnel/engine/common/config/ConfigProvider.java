@@ -24,11 +24,14 @@ import com.hazelcast.config.YamlConfigBuilder;
 import com.hazelcast.internal.config.YamlConfigLocator;
 import lombok.NonNull;
 
+import java.io.ByteArrayInputStream;
+import java.util.Arrays;
 import java.util.Properties;
 
 import static com.hazelcast.internal.config.DeclarativeConfigUtil.SYSPROP_CLIENT_CONFIG;
 import static com.hazelcast.internal.config.DeclarativeConfigUtil.SYSPROP_MEMBER_CONFIG;
 import static com.hazelcast.internal.config.DeclarativeConfigUtil.validateSuffixInSystemProperty;
+import static com.hazelcast.internal.util.StringUtil.isNullOrEmptyAfterTrim;
 
 /**
  * Locates and loads SeaTunnel or SeaTunnel Client configurations from various locations.
@@ -72,6 +75,27 @@ public final class ConfigProvider {
         return config;
     }
 
+    public static SeaTunnelConfig locateAndGetSeaTunnelConfigFromString(String source) {
+        return locateAndGetSeaTunnelConfigFromString(source, null);
+    }
+
+    @NonNull public static SeaTunnelConfig locateAndGetSeaTunnelConfigFromString(
+            String source, Properties properties) {
+        SeaTunnelConfig config;
+        if (isNullOrEmptyAfterTrim(source)) {
+            throw new IllegalArgumentException(
+                    "provided string configuration is null or empty! "
+                            + "Please use a well-structured content.");
+        }
+        byte[] bytes = source.getBytes();
+        // Try loading YAML config from the source Text String
+        config =
+                new YamlSeaTunnelConfigBuilder(new ByteArrayInputStream(bytes))
+                        .setProperties(properties)
+                        .build();
+        return config;
+    }
+
     @NonNull public static ClientConfig locateAndGetClientConfig() {
         validateSuffixInSystemProperty(SYSPROP_CLIENT_CONFIG);
 
@@ -88,6 +112,10 @@ public final class ConfigProvider {
             // 3. Loading the default YAML configuration file
             yamlConfigLocator.locateDefault();
             config = new YamlClientConfigBuilder(yamlConfigLocator.getIn()).build();
+        }
+        String stDockerMemberList = System.getenv("ST_DOCKER_MEMBER_LIST");
+        if (stDockerMemberList != null) {
+            config.getNetworkConfig().setAddresses(Arrays.asList(stDockerMemberList.split(",")));
         }
         return config;
     }
@@ -117,6 +145,15 @@ public final class ConfigProvider {
                     new YamlConfigBuilder(yamlConfigLocator.getIn())
                             .setProperties(properties)
                             .build();
+        }
+        String stDockerMemberList = System.getenv("ST_DOCKER_MEMBER_LIST");
+        if (stDockerMemberList != null) {
+            if (config.getNetworkConfig().getJoin().getTcpIpConfig().isEnabled()) {
+                config.getNetworkConfig()
+                        .getJoin()
+                        .getTcpIpConfig()
+                        .setMembers(Arrays.asList(stDockerMemberList.split(",")));
+            }
         }
         return config;
     }

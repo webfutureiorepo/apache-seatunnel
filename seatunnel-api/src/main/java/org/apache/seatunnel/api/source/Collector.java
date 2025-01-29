@@ -17,7 +17,7 @@
 
 package org.apache.seatunnel.api.source;
 
-import org.apache.seatunnel.api.table.event.SchemaChangeEvent;
+import org.apache.seatunnel.api.table.schema.event.SchemaChangeEvent;
 
 /**
  * A {@link Collector} is used to collect data from {@link SourceReader}.
@@ -40,4 +40,10 @@ public interface Collector<T> {
      * @return The object to use as the lock
      */
     Object getCheckpointLock();
+
+    default boolean isEmptyThisPollNext() {
+        return false;
+    }
+
+    default void resetEmptyThisPollNext() {}
 }

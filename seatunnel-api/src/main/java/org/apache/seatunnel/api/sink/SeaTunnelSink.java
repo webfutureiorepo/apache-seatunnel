@@ -21,6 +21,7 @@ import org.apache.seatunnel.api.common.PluginIdentifierInterface;
 import org.apache.seatunnel.api.common.SeaTunnelPluginLifeCycle;
 import org.apache.seatunnel.api.serialization.Serializer;
 import org.apache.seatunnel.api.source.SeaTunnelJobAware;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
 import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
 
@@ -57,14 +58,20 @@ public interface SeaTunnelSink<IN, StateT, CommitInfoT, AggregatedCommitInfoT>
      * @param seaTunnelRowType The row type info of sink.
      */
     @Deprecated
-    void setTypeInfo(SeaTunnelRowType seaTunnelRowType);
+    default void setTypeInfo(SeaTunnelRowType seaTunnelRowType) {
+        throw new UnsupportedOperationException("setTypeInfo method is not supported");
+    }
 
     /**
      * Get the data type of the records consumed by this sink.
      *
+     * @deprecated instead by {@link org.apache.seatunnel.api.table.factory.Factory}
      * @return SeaTunnel data type.
      */
-    SeaTunnelDataType<IN> getConsumedType();
+    @Deprecated
+    default SeaTunnelDataType<IN> getConsumedType() {
+        throw new UnsupportedOperationException("getConsumedType method is not supported");
+    }
 
     /**
      * This method will be called to creat {@link SinkWriter}
@@ -127,6 +134,15 @@ public interface SeaTunnelSink<IN, StateT, CommitInfoT, AggregatedCommitInfoT>
      * @return Serializer of {@link AggregatedCommitInfoT}
      */
     default Optional<Serializer<AggregatedCommitInfoT>> getAggregatedCommitInfoSerializer() {
+        return Optional.empty();
+    }
+
+    /**
+     * Get the catalog table of the sink.
+     *
+     * @return Optional of catalog table.
+     */
+    default Optional<CatalogTable> getWriteCatalogTable() {
         return Optional.empty();
     }
 }

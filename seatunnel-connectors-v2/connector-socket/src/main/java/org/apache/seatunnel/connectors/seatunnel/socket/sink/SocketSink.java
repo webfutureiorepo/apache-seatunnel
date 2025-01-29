@@ -23,7 +23,7 @@ import org.apache.seatunnel.api.common.PrepareFailException;
 import org.apache.seatunnel.api.common.SeaTunnelAPIErrorCode;
 import org.apache.seatunnel.api.sink.SeaTunnelSink;
 import org.apache.seatunnel.api.sink.SinkWriter;
-import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
 import org.apache.seatunnel.common.config.CheckConfigUtil;
@@ -37,6 +37,7 @@ import org.apache.seatunnel.connectors.seatunnel.socket.exception.SocketConnecto
 import com.google.auto.service.AutoService;
 
 import java.io.IOException;
+import java.util.Optional;
 
 import static org.apache.seatunnel.connectors.seatunnel.socket.config.SocketSinkConfigOptions.HOST;
 import static org.apache.seatunnel.connectors.seatunnel.socket.config.SocketSinkConfigOptions.PORT;
@@ -72,13 +73,13 @@ public class SocketSink extends AbstractSimpleSink<SeaTunnelRow, Void> {
     }
 
     @Override
-    public SeaTunnelDataType<SeaTunnelRow> getConsumedType() {
-        return seaTunnelRowType;
-    }
-
-    @Override
     public AbstractSinkWriter<SeaTunnelRow, Void> createWriter(SinkWriter.Context context)
             throws IOException {
         return new SocketSinkWriter(sinkConfig, seaTunnelRowType);
+    }
+
+    @Override
+    public Optional<CatalogTable> getWriteCatalogTable() {
+        return super.getWriteCatalogTable();
     }
 }

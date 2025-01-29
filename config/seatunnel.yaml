@@ -17,6 +17,7 @@
 
 seatunnel:
   engine:
+    classloader-cache-mode: true
     history-job-expire-minutes: 1440
     backup-count: 1
     queue-type: blockingqueue
@@ -34,3 +35,12 @@ seatunnel:
           namespace: /tmp/seatunnel/checkpoint_snapshot
           storage.type: hdfs
           fs.defaultFS: file:///tmp/ # Ensure that the directory has written permission
+    telemetry:
+      metric:
+        enabled: false
+      log:
+        scheduled-deletion-enable: true
+    http:
+      enable-http: true
+      port: 8080
+      enable-dynamic-port: false

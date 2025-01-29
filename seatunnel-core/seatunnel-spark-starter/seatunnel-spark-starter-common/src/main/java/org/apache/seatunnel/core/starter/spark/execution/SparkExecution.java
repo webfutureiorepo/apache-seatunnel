@@ -26,6 +26,7 @@ import org.apache.seatunnel.core.starter.exception.TaskExecuteException;
 import org.apache.seatunnel.core.starter.execution.PluginExecuteProcessor;
 import org.apache.seatunnel.core.starter.execution.RuntimeEnvironment;
 import org.apache.seatunnel.core.starter.execution.TaskExecution;
+import org.apache.seatunnel.translation.spark.execution.DatasetTableInfo;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -47,6 +48,8 @@ public class SparkExecution implements TaskExecution {
         this.sparkRuntimeEnvironment = SparkRuntimeEnvironment.getInstance(config);
         JobContext jobContext = new JobContext();
         jobContext.setJobMode(RuntimeEnvironment.getJobMode(config));
+        jobContext.setEnableCheckpoint(RuntimeEnvironment.getEnableCheckpoint(config));
+
         this.sourcePluginExecuteProcessor =
                 new SourceExecuteProcessor(
                         sparkRuntimeEnvironment,

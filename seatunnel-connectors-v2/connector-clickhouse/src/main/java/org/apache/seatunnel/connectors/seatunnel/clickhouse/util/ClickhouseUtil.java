@@ -17,6 +17,10 @@
 
 package org.apache.seatunnel.connectors.seatunnel.clickhouse.util;
 
+import org.apache.seatunnel.api.configuration.ReadonlyConfig;
+import org.apache.seatunnel.connectors.seatunnel.clickhouse.config.ClickhouseConfig;
+
+import org.apache.commons.collections4.MapUtils;
 import org.apache.commons.lang3.StringUtils;
 
 import com.clickhouse.client.ClickHouseCredentials;
@@ -25,39 +29,55 @@ import com.clickhouse.client.ClickHouseProtocol;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 public class ClickhouseUtil {
+
+    public static List<ClickHouseNode> createNodes(ReadonlyConfig config) {
+        return createNodes(
+                config.get(ClickhouseConfig.HOST),
+                config.get(ClickhouseConfig.DATABASE),
+                config.get(ClickhouseConfig.SERVER_TIME_ZONE),
+                config.get(ClickhouseConfig.USERNAME),
+                config.get(ClickhouseConfig.PASSWORD),
+                null);
+    }
 
     public static List<ClickHouseNode> createNodes(
             String nodeAddress,
             String database,
             String serverTimeZone,
             String username,
-            String password) {
+            String password,
+            Map<String, String> options) {
         return Arrays.stream(nodeAddress.split(","))
                 .map(
                         address -> {
                             String[] nodeAndPort = address.split(":", 2);
-                            if (StringUtils.isEmpty(username) && StringUtils.isEmpty(password)) {
-                                return ClickHouseNode.builder()
-                                        .host(nodeAndPort[0])
-                                        .port(
-                                                ClickHouseProtocol.HTTP,
-                                                Integer.parseInt(nodeAndPort[1]))
-                                        .database(database)
-                                        .timeZone(serverTimeZone)
-                                        .build();
+                            ClickHouseNode.Builder builder =
+                                    ClickHouseNode.builder()
+                                            .host(nodeAndPort[0])
+                                            .port(
+                                                    ClickHouseProtocol.HTTP,
+                                                    Integer.parseInt(nodeAndPort[1]))
+                                            .database(database)
+                                            .timeZone(serverTimeZone);
+                            if (MapUtils.isNotEmpty(options)) {
+                                for (Map.Entry<String, String> entry : options.entrySet()) {
+                                    builder = builder.addOption(entry.getKey(), entry.getValue());
+                                }
                             }
-                            return ClickHouseNode.builder()
-                                    .host(nodeAndPort[0])
-                                    .port(ClickHouseProtocol.HTTP, Integer.parseInt(nodeAndPort[1]))
-                                    .database(database)
-                                    .timeZone(serverTimeZone)
-                                    .credentials(
-                                            ClickHouseCredentials.fromUserAndPassword(
-                                                    username, password))
-                                    .build();
+
+                            if (StringUtils.isNotEmpty(username)
+                                    && StringUtils.isNotEmpty(password)) {
+                                builder =
+                                        builder.credentials(
+                                                ClickHouseCredentials.fromUserAndPassword(
+                                                        username, password));
+                            }
+
+                            return builder.build();
                         })
                 .collect(Collectors.toList());
     }

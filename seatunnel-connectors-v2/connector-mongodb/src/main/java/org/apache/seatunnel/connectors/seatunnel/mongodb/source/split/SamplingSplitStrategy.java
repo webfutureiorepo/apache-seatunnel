@@ -108,7 +108,12 @@ public class SamplingSplitStrategy implements MongoSplitStrategy, Serializable {
                 clientProvider.getDefaultCollection().getNamespace().getCollectionName();
         BsonDocument statsCmd = new BsonDocument("collStats", new BsonString(collectionName));
         Document res = clientProvider.getDefaultDatabase().runCommand(statsCmd);
-        long total = res.getInteger("count");
+        Object count = res.get("count");
+        // fix issue https://github.com/apache/seatunnel/issues/7575
+        long total =
+                Optional.ofNullable(count)
+                        .map(v -> Long.parseLong(String.valueOf(count)))
+                        .orElse(0L);
         Object avgDocumentBytes = res.get("avgObjSize");
         long avgObjSize =
                 Optional.ofNullable(avgDocumentBytes)
@@ -193,19 +198,13 @@ public class SamplingSplitStrategy implements MongoSplitStrategy, Serializable {
 
         private static final BsonDocument EMPTY_PROJECTION = new BsonDocument();
 
-        private static final String DEFAULT_SPLIT_KEY = "_id";
-
         private static final long DEFAULT_SAMPLES_PER_SPLIT = 10;
-
-        private static final long DEFAULT_SIZE_PER_SPLIT = 64 * 1024 * 1024;
 
         Builder() {
             this.clientProvider = null;
-            this.splitKey = DEFAULT_SPLIT_KEY;
             this.matchQuery = EMPTY_MATCH_QUERY;
             this.projection = EMPTY_PROJECTION;
             this.samplesPerSplit = DEFAULT_SAMPLES_PER_SPLIT;
-            this.sizePerSplit = DEFAULT_SIZE_PER_SPLIT;
         }
 
         public Builder setClientProvider(MongodbClientProvider clientProvider) {

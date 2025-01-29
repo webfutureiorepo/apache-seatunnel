@@ -22,7 +22,7 @@ import org.apache.seatunnel.api.table.type.DecimalType;
 import org.apache.seatunnel.api.table.type.LocalTimeType;
 import org.apache.seatunnel.api.table.type.PrimitiveByteArrayType;
 import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
-import org.apache.seatunnel.common.exception.CommonErrorCode;
+import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.connectors.seatunnel.tdengine.exception.TDengineConnectorException;
 
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +34,7 @@ public class TDengineTypeMapper {
 
     private static final String TDENGINE_UNKNOWN = "UNKNOWN";
     private static final String TDENGINE_BIT = "BIT";
+    private static final String TDENGINE_BOOL = "BOOL";
 
     // -------------------------number----------------------------
     private static final String TDENGINE_TINYINT = "TINYINT";
@@ -57,6 +58,7 @@ public class TDengineTypeMapper {
 
     // -------------------------string----------------------------
     private static final String TDENGINE_CHAR = "CHAR";
+    private static final String TDENGINE_NCHAR = "NCHAR";
     private static final String TDENGINE_VARCHAR = "VARCHAR";
     private static final String TDENGINE_TINYTEXT = "TINYTEXT";
     private static final String TDENGINE_MEDIUMTEXT = "MEDIUMTEXT";
@@ -82,6 +84,7 @@ public class TDengineTypeMapper {
 
     public static SeaTunnelDataType<?> mapping(String tdengineType) {
         switch (tdengineType) {
+            case TDENGINE_BOOL:
             case TDENGINE_BIT:
                 return BasicType.BOOLEAN_TYPE;
             case TDENGINE_TINYINT:
@@ -116,6 +119,7 @@ public class TDengineTypeMapper {
                 log.warn("{} will probably cause value overflow.", TDENGINE_DOUBLE_UNSIGNED);
                 return BasicType.DOUBLE_TYPE;
             case TDENGINE_CHAR:
+            case TDENGINE_NCHAR:
             case TDENGINE_TINYTEXT:
             case TDENGINE_MEDIUMTEXT:
             case TDENGINE_TEXT:
@@ -144,10 +148,8 @@ public class TDengineTypeMapper {
             case TDENGINE_UNKNOWN:
             default:
                 throw new TDengineConnectorException(
-                        CommonErrorCode.UNSUPPORTED_DATA_TYPE,
-                        String.format(
-                                "Doesn't support TDENGINE type '%s' on column '%s'  yet.",
-                                tdengineType));
+                        CommonErrorCodeDeprecated.UNSUPPORTED_DATA_TYPE,
+                        String.format("Doesn't support TDENGINE type '%s' yet.", tdengineType));
         }
     }
 }

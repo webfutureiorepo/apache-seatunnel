@@ -17,6 +17,8 @@
 
 package org.apache.seatunnel.api.table.catalog;
 
+import org.apache.seatunnel.shade.com.fasterxml.jackson.core.type.TypeReference;
+
 import org.apache.seatunnel.api.configuration.Option;
 import org.apache.seatunnel.api.configuration.Options;
 
@@ -24,6 +26,8 @@ import java.util.List;
 import java.util.Map;
 
 public interface CatalogOptions {
+
+    @Deprecated
     Option<Map<String, String>> CATALOG_OPTIONS =
             Options.key("catalog")
                     .mapType()
@@ -54,4 +58,12 @@ public interface CatalogOptions {
                     .withDescription(
                             "The table names RegEx of the database to capture."
                                     + "The table name needs to include the database name, for example: database_.*\\.table_.*");
+
+    Option<List<Map<String, Object>>> TABLE_LIST =
+            Options.key("table_list")
+                    .type(new TypeReference<List<Map<String, Object>>>() {})
+                    .noDefaultValue()
+                    .withDescription(
+                            "SeaTunnel Multi Table Schema, acts on structed data sources. "
+                                    + "such as jdbc, paimon, doris, etc");
 }

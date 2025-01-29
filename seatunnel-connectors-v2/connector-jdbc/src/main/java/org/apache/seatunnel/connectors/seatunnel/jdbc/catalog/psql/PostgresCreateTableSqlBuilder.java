@@ -19,33 +19,43 @@ package org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.psql;
 
 import org.apache.seatunnel.api.table.catalog.CatalogTable;
 import org.apache.seatunnel.api.table.catalog.Column;
+import org.apache.seatunnel.api.table.catalog.ConstraintKey;
 import org.apache.seatunnel.api.table.catalog.PrimaryKey;
 import org.apache.seatunnel.api.table.catalog.TablePath;
-import org.apache.seatunnel.api.table.type.DecimalType;
-import org.apache.seatunnel.api.table.type.SqlType;
 import org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.utils.CatalogUtils;
+import org.apache.seatunnel.connectors.seatunnel.jdbc.internal.dialect.DatabaseIdentifier;
+import org.apache.seatunnel.connectors.seatunnel.jdbc.internal.dialect.psql.PostgresTypeConverter;
 
+import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 
+import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
+
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
-import static org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.psql.PostgresDataTypeConvertor.PG_BYTEA;
-import static org.apache.seatunnel.connectors.seatunnel.jdbc.catalog.psql.PostgresDataTypeConvertor.PG_NUMERIC;
-
+@Slf4j
 public class PostgresCreateTableSqlBuilder {
     private List<Column> columns;
     private PrimaryKey primaryKey;
-    private PostgresDataTypeConvertor postgresDataTypeConvertor;
     private String sourceCatalogName;
     private String fieldIde;
+    private List<ConstraintKey> constraintKeys;
+    public Boolean isHaveConstraintKey = false;
 
-    public PostgresCreateTableSqlBuilder(CatalogTable catalogTable) {
+    @Getter public List<String> createIndexSqls = new ArrayList<>();
+    private boolean createIndex;
+
+    public PostgresCreateTableSqlBuilder(CatalogTable catalogTable, boolean createIndex) {
         this.columns = catalogTable.getTableSchema().getColumns();
         this.primaryKey = catalogTable.getTableSchema().getPrimaryKey();
-        this.postgresDataTypeConvertor = new PostgresDataTypeConvertor();
         this.sourceCatalogName = catalogTable.getCatalogName();
         this.fieldIde = catalogTable.getOptions().get("fieldIde");
+        this.constraintKeys = catalogTable.getTableSchema().getConstraintKeys();
+        this.createIndex = createIndex;
     }
 
     public String build(TablePath tablePath) {
@@ -62,6 +72,37 @@ public class PostgresCreateTableSqlBuilder {
                                         CatalogUtils.quoteIdentifier(
                                                 buildColumnSql(column), fieldIde))
                         .collect(Collectors.toList());
+
+        // add primary key
+        if (createIndex && primaryKey != null) {
+            columnSqls.add("\t" + buildPrimaryKeySql());
+        }
+
+        if (createIndex && CollectionUtils.isNotEmpty(constraintKeys)) {
+            for (ConstraintKey constraintKey : constraintKeys) {
+                if (StringUtils.isBlank(constraintKey.getConstraintName())
+                        || (primaryKey != null
+                                && StringUtils.equals(
+                                        primaryKey.getPrimaryKey(),
+                                        constraintKey.getConstraintName()))) {
+                    continue;
+                }
+                isHaveConstraintKey = true;
+                switch (constraintKey.getConstraintType()) {
+                    case UNIQUE_KEY:
+                        String uniqueKeySql = buildUniqueKeySql(constraintKey);
+                        columnSqls.add("\t" + uniqueKeySql);
+                        break;
+                    case INDEX_KEY:
+                        String indexKeySql = buildIndexKeySql(tablePath, constraintKey);
+                        createIndexSqls.add(indexKeySql);
+                        break;
+                    case FOREIGN_KEY:
+                        // todo: add foreign key
+                        break;
+                }
+            }
+        }
 
         createTableSql.append(String.join(",\n", columnSqls));
         createTableSql.append("\n);");
@@ -89,7 +130,7 @@ public class PostgresCreateTableSqlBuilder {
 
         // For simplicity, assume the column type in SeaTunnelDataType is the same as in PostgreSQL
         String columnType =
-                StringUtils.equalsIgnoreCase("postgres", sourceCatalogName)
+                StringUtils.equalsIgnoreCase(DatabaseIdentifier.POSTGRESQL, sourceCatalogName)
                         ? column.getSourceType()
                         : buildColumnType(column);
         columnSql.append(columnType);
@@ -98,39 +139,11 @@ public class PostgresCreateTableSqlBuilder {
         if (!column.isNullable()) {
             columnSql.append(" NOT NULL");
         }
-
-        // Add primary key directly after the column if it is a primary key
-        if (primaryKey != null && primaryKey.getColumnNames().contains(column.getName())) {
-            columnSql.append(" PRIMARY KEY");
-        }
-
         return columnSql.toString();
     }
 
     private String buildColumnType(Column column) {
-        SqlType sqlType = column.getDataType().getSqlType();
-        Long columnLength = column.getLongColumnLength();
-        switch (sqlType) {
-            case BYTES:
-                return PG_BYTEA;
-            case STRING:
-                if (columnLength > 0 && columnLength < 10485760) {
-                    return "varchar(" + columnLength + ")";
-                } else {
-                    return "text";
-                }
-            default:
-                String type = postgresDataTypeConvertor.toConnectorType(column.getDataType(), null);
-                if (type.equals(PG_NUMERIC)) {
-                    DecimalType decimalType = (DecimalType) column.getDataType();
-                    return "numeric("
-                            + decimalType.getPrecision()
-                            + ","
-                            + decimalType.getScale()
-                            + ")";
-                }
-                return type;
-        }
+        return PostgresTypeConverter.INSTANCE.reconvert(column).getColumnType();
     }
 
     private String buildColumnCommentSql(Column column, String tableName) {
@@ -142,8 +155,57 @@ public class PostgresCreateTableSqlBuilder {
         columnCommentSql
                 .append(CatalogUtils.quoteIdentifier(column.getName(), fieldIde, "\""))
                 .append(CatalogUtils.quoteIdentifier(" IS '", fieldIde))
-                .append(column.getComment())
+                .append(column.getComment().replace("'", "''"))
                 .append("'");
         return columnCommentSql.toString();
+    }
+
+    private String buildPrimaryKeySql() {
+        String constraintName = UUID.randomUUID().toString().replace("-", "");
+        String primaryKeyColumns =
+                primaryKey.getColumnNames().stream()
+                        .map(
+                                column ->
+                                        String.format(
+                                                "\"%s\"",
+                                                CatalogUtils.getFieldIde(column, fieldIde)))
+                        .collect(Collectors.joining(","));
+        return "CONSTRAINT \"" + constraintName + "\" PRIMARY KEY (" + primaryKeyColumns + ")";
+    }
+
+    private String buildUniqueKeySql(ConstraintKey constraintKey) {
+        String constraintName = UUID.randomUUID().toString().replace("-", "");
+        String indexColumns =
+                constraintKey.getColumnNames().stream()
+                        .map(
+                                constraintKeyColumn ->
+                                        String.format(
+                                                "\"%s\"",
+                                                CatalogUtils.getFieldIde(
+                                                        constraintKeyColumn.getColumnName(),
+                                                        fieldIde)))
+                        .collect(Collectors.joining(", "));
+        return "CONSTRAINT \"" + constraintName + "\" UNIQUE (" + indexColumns + ")";
+    }
+
+    private String buildIndexKeySql(TablePath tablePath, ConstraintKey constraintKey) {
+        // If the index name is omitted, PostgreSQL will choose an appropriate name based on table
+        // name and indexed columns.
+        String indexColumns =
+                constraintKey.getColumnNames().stream()
+                        .map(
+                                constraintKeyColumn ->
+                                        String.format(
+                                                "\"%s\"",
+                                                CatalogUtils.getFieldIde(
+                                                        constraintKeyColumn.getColumnName(),
+                                                        fieldIde)))
+                        .collect(Collectors.joining(", "));
+
+        return "CREATE INDEX ON "
+                + tablePath.getSchemaAndTableName("\"")
+                + "("
+                + indexColumns
+                + ");";
     }
 }

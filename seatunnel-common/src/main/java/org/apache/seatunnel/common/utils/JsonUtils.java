@@ -34,6 +34,7 @@ import org.apache.seatunnel.shade.com.fasterxml.jackson.databind.node.JsonNodeTy
 import org.apache.seatunnel.shade.com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.seatunnel.shade.com.fasterxml.jackson.databind.node.TextNode;
 import org.apache.seatunnel.shade.com.fasterxml.jackson.databind.type.CollectionType;
+import org.apache.seatunnel.shade.com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import org.apache.commons.lang3.StringUtils;
 
@@ -59,7 +60,9 @@ public class JsonUtils {
                     .configure(ACCEPT_EMPTY_ARRAY_AS_NULL_OBJECT, true)
                     .configure(READ_UNKNOWN_ENUM_VALUES_AS_NULL, true)
                     .configure(REQUIRE_SETTERS_FOR_GETTERS, true)
-                    .setTimeZone(TimeZone.getDefault());
+                    .setTimeZone(TimeZone.getDefault())
+                    // support java8 time api
+                    .registerModule(new JavaTimeModule());
 
     private static final ObjectMapper DEFAULT_OBJECT_MAPPER = new ObjectMapper();
 
@@ -80,6 +83,10 @@ public class JsonUtils {
     }
 
     public static JsonNode stringToJsonNode(String obj) throws JsonProcessingException {
+        return OBJECT_MAPPER.readTree(obj);
+    }
+
+    public static JsonNode readTree(byte[] obj) throws IOException {
         return OBJECT_MAPPER.readTree(obj);
     }
 
@@ -294,6 +301,15 @@ public class JsonUtils {
             } else {
                 return node.toString();
             }
+        }
+    }
+
+    public static boolean isJsonArray(String jsonString) {
+        try {
+            JsonNode jsonNode = OBJECT_MAPPER.readTree(jsonString);
+            return jsonNode.isArray();
+        } catch (Exception e) {
+            return false;
         }
     }
 }

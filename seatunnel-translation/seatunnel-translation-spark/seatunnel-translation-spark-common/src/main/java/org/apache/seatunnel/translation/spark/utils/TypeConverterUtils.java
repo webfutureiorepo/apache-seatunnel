@@ -25,22 +25,28 @@ import org.apache.seatunnel.api.table.type.MapType;
 import org.apache.seatunnel.api.table.type.PrimitiveByteArrayType;
 import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
+import org.apache.seatunnel.api.table.type.SqlType;
 
 import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.Metadata;
+import org.apache.spark.sql.types.MetadataBuilder;
 import org.apache.spark.sql.types.StructField;
 import org.apache.spark.sql.types.StructType;
 
 import java.util.HashMap;
 import java.util.Map;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.seatunnel.shade.com.google.common.base.Preconditions.checkNotNull;
 
 public class TypeConverterUtils {
+
     private static final Map<DataType, SeaTunnelDataType<?>> TO_SEA_TUNNEL_TYPES =
             new HashMap<>(16);
-    public static final String ROW_KIND_FIELD = "op";
+    public static final String ROW_KIND_FIELD = "seatunnel_row_kind";
+    public static final String ROW = "row";
+    public static final String TABLE_ID = "seatunnel_table_id";
+    public static final String LOGICAL_TIME_TYPE_FLAG = "logical_time_type";
 
     static {
         TO_SEA_TUNNEL_TYPES.put(DataTypes.NullType, BasicType.VOID_TYPE);
@@ -54,7 +60,6 @@ public class TypeConverterUtils {
         TO_SEA_TUNNEL_TYPES.put(DataTypes.DoubleType, BasicType.DOUBLE_TYPE);
         TO_SEA_TUNNEL_TYPES.put(DataTypes.BinaryType, PrimitiveByteArrayType.INSTANCE);
         TO_SEA_TUNNEL_TYPES.put(DataTypes.DateType, LocalTimeType.LOCAL_DATE_TYPE);
-        TO_SEA_TUNNEL_TYPES.put(DataTypes.TimestampType, LocalTimeType.LOCAL_DATE_TIME_TYPE);
     }
 
     private TypeConverterUtils() {
@@ -87,10 +92,12 @@ public class TypeConverterUtils {
                 return DataTypes.BinaryType;
             case DATE:
                 return DataTypes.DateType;
-                // case TIME:
-                // TODO: not support now, how reconvert?
+            case TIME:
+                return DataTypes.LongType;
             case TIMESTAMP:
                 return DataTypes.TimestampType;
+            case TIMESTAMP_TZ:
+                return OffsetDateTimeUtils.OFFSET_DATETIME_WITH_DECIMAL;
             case ARRAY:
                 return DataTypes.createArrayType(
                         convert(((ArrayType<?, ?>) dataType).getElementType()));
@@ -113,12 +120,36 @@ public class TypeConverterUtils {
         // TODO: row kind
         StructField[] fields = new StructField[rowType.getFieldNames().length];
         for (int i = 0; i < rowType.getFieldNames().length; i++) {
+            SeaTunnelDataType<?> fieldType = rowType.getFieldTypes()[i];
+            Metadata metadata;
+            if (fieldType.getSqlType() == SqlType.TIME) {
+                metadata = new MetadataBuilder().putBoolean(LOGICAL_TIME_TYPE_FLAG, true).build();
+            } else if (fieldType.getSqlType() == SqlType.TIMESTAMP_TZ) {
+                metadata =
+                        new MetadataBuilder()
+                                .putBoolean(
+                                        OffsetDateTimeUtils.LOGICAL_TIMESTAMP_WITH_OFFSET_TYPE_FLAG,
+                                        true)
+                                .build();
+            } else {
+                metadata = Metadata.empty();
+            }
+
             fields[i] =
-                    new StructField(
-                            rowType.getFieldNames()[i],
-                            convert(rowType.getFieldTypes()[i]),
-                            true,
-                            Metadata.empty());
+                    new StructField(rowType.getFieldNames()[i], convert(fieldType), true, metadata);
+        }
+        return new StructType(fields);
+    }
+
+    public static DataType parcel(SeaTunnelDataType<?> dataType) {
+        // 0 -> row kind, 1 -> table id
+        SeaTunnelRowType seaTunnelRowType = (SeaTunnelRowType) dataType;
+        StructField[] fields = new StructField[2 + seaTunnelRowType.getTotalFields()];
+        fields[0] = new StructField(ROW_KIND_FIELD, DataTypes.ByteType, true, Metadata.empty());
+        fields[1] = new StructField(TABLE_ID, DataTypes.StringType, true, Metadata.empty());
+        StructType structType = (StructType) convert(dataType);
+        for (int i = 0; i < seaTunnelRowType.getTotalFields(); i++) {
+            fields[i + 2] = structType.fields()[i];
         }
         return new StructType(fields);
     }
@@ -178,7 +209,20 @@ public class TypeConverterUtils {
         SeaTunnelDataType<?>[] fieldTypes = new SeaTunnelDataType[structFields.length];
         for (int i = 0; i < structFields.length; i++) {
             fieldNames[i] = structFields[i].name();
-            fieldTypes[i] = convert(structFields[i].dataType());
+            Metadata metadata = structFields[i].metadata();
+            if (metadata != null
+                    && metadata.contains(LOGICAL_TIME_TYPE_FLAG)
+                    && metadata.getBoolean(LOGICAL_TIME_TYPE_FLAG)) {
+                fieldTypes[i] = LocalTimeType.LOCAL_TIME_TYPE;
+            } else if (metadata != null
+                    && metadata.contains(
+                            OffsetDateTimeUtils.LOGICAL_TIMESTAMP_WITH_OFFSET_TYPE_FLAG)
+                    && metadata.getBoolean(
+                            OffsetDateTimeUtils.LOGICAL_TIMESTAMP_WITH_OFFSET_TYPE_FLAG)) {
+                fieldTypes[i] = LocalTimeType.OFFSET_DATE_TIME_TYPE;
+            } else {
+                fieldTypes[i] = convert(structFields[i].dataType());
+            }
         }
         return new SeaTunnelRowType(fieldNames, fieldTypes);
     }

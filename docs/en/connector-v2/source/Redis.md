@@ -17,14 +17,16 @@ Used to read data from Redis.
 
 ## Options
 
-|        name         |  type  |       required        | default value |
-|---------------------|--------|-----------------------|---------------|
+| name                | type   | required              | default value |
+| ------------------- | ------ | --------------------- | ------------- |
 | host                | string | yes                   | -             |
 | port                | int    | yes                   | -             |
 | keys                | string | yes                   | -             |
+| batch_size          | int    | yes                   | 10            |
 | data_type           | string | yes                   | -             |
 | user                | string | no                    | -             |
 | auth                | string | no                    | -             |
+| db_num              | int    | no                    | 0             |
 | mode                | string | no                    | single        |
 | hash_key_parse_mode | string | no                    | all           |
 | nodes               | list   | yes when mode=cluster | -             |
@@ -65,7 +67,6 @@ for example, if the value of hash key is the following shown:
 if hash_key_parse_mode is `all` and schema config as the following shown, it will generate the following data:
 
 ```hocon
-
 schema {
   fields {
     001 {
@@ -81,14 +82,13 @@ schema {
 
 ```
 
-|               001               |            002            |
-|---------------------------------|---------------------------|
+| 001                             | 002                       |
+| ------------------------------- | ------------------------- |
 | Row(name=tyrantlucifer, age=26) | Row(name=Zongwen, age=26) |
 
 if hash_key_parse_mode is `kv` and schema config as the following shown, it will generate the following data:
 
 ```hocon
-
 schema {
   fields {
     hash_key = string
@@ -99,10 +99,10 @@ schema {
 
 ```
 
-| hash_key |     name      | age |
-|----------|---------------|-----|
-| 001      | tyrantlucifer | 26  |
-| 002      | Zongwen       | 26  |
+| hash_key | name          | age  |
+| -------- | ------------- | ---- |
+| 001      | tyrantlucifer | 26   |
+| 002      | Zongwen       | 26   |
 
 each kv that in hash key it will be treated as a row and send it to upstream.
 
@@ -111,6 +111,10 @@ each kv that in hash key it will be treated as a row and send it to upstream.
 ### keys [string]
 
 keys pattern
+
+### batch_size [int]
+
+indicates the number of keys to attempt to return per iteration,default 10
 
 **Tips:Redis source connector support fuzzy key matching, user needs to ensure that the matched keys are the same type**
 
@@ -151,6 +155,10 @@ redis authentication user, you need it when you connect to an encrypted cluster
 
 redis authentication password, you need it when you connect to an encrypted cluster
 
+### db_num [int]
+
+Redis database index ID. It is connected to db 0 by default
+
 ### mode [string]
 
 redis mode, `single` or `cluster`, default is `single`
@@ -170,7 +178,6 @@ when you assign format is `json`, you should also assign schema option, for exam
 upstream data is the following:
 
 ```json
-
 {"code":  200, "data":  "get success", "success":  true}
 
 ```
@@ -178,7 +185,6 @@ upstream data is the following:
 you should assign schema as the following:
 
 ```hocon
-
 schema {
     fields {
         code = int
@@ -191,8 +197,8 @@ schema {
 
 connector will generate data as the following:
 
-| code |    data     | success |
-|------|-------------|---------|
+| code | data        | success |
+| ---- | ----------- | ------- |
 | 200  | get success | true    |
 
 when you assign format is `text`, connector will do nothing for upstream data, for example:
@@ -200,15 +206,14 @@ when you assign format is `text`, connector will do nothing for upstream data, f
 upstream data is the following:
 
 ```json
-
 {"code":  200, "data":  "get success", "success":  true}
 
 ```
 
 connector will generate data as the following:
 
-|                         content                          |
-|----------------------------------------------------------|
+| content                                                  |
+| -------------------------------------------------------- |
 | {"code":  200, "data":  "get success", "success":  true} |
 
 ### schema [config]
@@ -219,7 +224,7 @@ the schema fields of redis data
 
 ### common options
 
-Source plugin common parameters, please refer to [Source Common Options](common-options.md) for details
+Source plugin common parameters, please refer to [Source Common Options](../source-common-options.md) for details
 
 ## Example
 
@@ -251,6 +256,32 @@ Redis {
 }
 ```
 
+read string type keys write append to list
+
+```hocon
+source {
+  Redis {
+    host = "redis-e2e"
+    port = 6379
+    auth = "U2VhVHVubmVs"
+    keys = "string_test*"
+    data_type = string
+    batch_size = 33
+  }
+}
+
+sink {
+  Redis {
+    host = "redis-e2e"
+    port = 6379
+    auth = "U2VhVHVubmVs"
+    key = "string_test_list"
+    data_type = list
+    batch_size = 33
+  }
+}
+```
+
 ## Changelog
 
 ### 2.2.0-beta 2022-09-26
@@ -260,4 +291,4 @@ Redis {
 ### next version
 
 - [Improve] Support redis cluster mode connection and user authentication [3188](https://github.com/apache/seatunnel/pull/3188)
-
+-  [Bug] Redis scan command supports versions 5, 6, 7 [7666](https://github.com/apache/seatunnel/pull/7666)

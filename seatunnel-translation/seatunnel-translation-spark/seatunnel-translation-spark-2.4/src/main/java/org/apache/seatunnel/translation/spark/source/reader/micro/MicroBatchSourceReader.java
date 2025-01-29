@@ -21,9 +21,9 @@ import org.apache.seatunnel.api.source.SeaTunnelSource;
 import org.apache.seatunnel.api.source.SupportCoordinate;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.common.utils.SerializationUtils;
+import org.apache.seatunnel.translation.spark.execution.MultiTableManager;
 import org.apache.seatunnel.translation.spark.source.partition.micro.MicroBatchPartition;
 import org.apache.seatunnel.translation.spark.source.state.MicroBatchState;
-import org.apache.seatunnel.translation.spark.utils.TypeConverterUtils;
 
 import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.sources.v2.reader.InputPartition;
@@ -33,12 +33,14 @@ import org.apache.spark.sql.types.StructType;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 public class MicroBatchSourceReader implements MicroBatchReader {
 
     protected final SeaTunnelSource<SeaTunnelRow, ?, ?> source;
     protected final Integer parallelism;
+    protected final String jobId;
 
     protected final Integer checkpointInterval;
     protected final String checkpointPath;
@@ -47,22 +49,30 @@ public class MicroBatchSourceReader implements MicroBatchReader {
     protected Integer checkpointId;
     protected MicroBatchState startOffset;
     protected MicroBatchState endOffset;
+    private Map<String, String> envOptions;
+    private final MultiTableManager multiTableManager;
 
     public MicroBatchSourceReader(
             SeaTunnelSource<SeaTunnelRow, ?, ?> source,
             Integer parallelism,
+            String jobId,
             Integer checkpointId,
             Integer checkpointInterval,
             String checkpointPath,
             String hdfsRoot,
-            String hdfsUser) {
+            String hdfsUser,
+            Map<String, String> envOptions,
+            MultiTableManager multiTableManager) {
         this.source = source;
         this.parallelism = parallelism;
+        this.jobId = jobId;
         this.checkpointId = checkpointId;
         this.checkpointInterval = checkpointInterval;
         this.checkpointPath = checkpointPath;
         this.hdfsRoot = hdfsRoot;
         this.hdfsUser = hdfsUser;
+        this.envOptions = envOptions;
+        this.multiTableManager = multiTableManager;
     }
 
     @Override
@@ -101,7 +111,7 @@ public class MicroBatchSourceReader implements MicroBatchReader {
 
     @Override
     public StructType readSchema() {
-        return (StructType) TypeConverterUtils.convert(source.getProducedType());
+        return multiTableManager.getTableSchema();
     }
 
     @Override
@@ -113,12 +123,15 @@ public class MicroBatchSourceReader implements MicroBatchReader {
                     new MicroBatchPartition(
                             source,
                             parallelism,
+                            jobId,
                             0,
                             checkpointId,
                             checkpointInterval,
                             checkpointPath,
                             hdfsRoot,
-                            hdfsUser));
+                            hdfsUser,
+                            envOptions,
+                            multiTableManager));
         } else {
             virtualPartitions = new ArrayList<>(parallelism);
             for (int subtaskId = 0; subtaskId < parallelism; subtaskId++) {
@@ -126,12 +139,15 @@ public class MicroBatchSourceReader implements MicroBatchReader {
                         new MicroBatchPartition(
                                 source,
                                 parallelism,
+                                jobId,
                                 subtaskId,
                                 checkpointId,
                                 checkpointInterval,
                                 checkpointPath,
                                 hdfsRoot,
-                                hdfsUser));
+                                hdfsUser,
+                                envOptions,
+                                multiTableManager));
             }
         }
         checkpointId++;

@@ -17,40 +17,45 @@
 
 package org.apache.seatunnel.engine.server.rest;
 
-import org.apache.seatunnel.shade.com.fasterxml.jackson.databind.JsonNode;
-import org.apache.seatunnel.shade.com.typesafe.config.Config;
-
-import org.apache.seatunnel.common.utils.JsonUtils;
-import org.apache.seatunnel.engine.common.Constant;
-import org.apache.seatunnel.engine.common.config.JobConfig;
-import org.apache.seatunnel.engine.common.utils.PassiveCompletableFuture;
-import org.apache.seatunnel.engine.core.job.JobImmutableInformation;
-import org.apache.seatunnel.engine.server.CoordinatorService;
-import org.apache.seatunnel.engine.server.SeaTunnelServer;
-import org.apache.seatunnel.engine.server.job.JobImmutableInformationEnv;
 import org.apache.seatunnel.engine.server.log.Log4j2HttpPostCommandProcessor;
+import org.apache.seatunnel.engine.server.rest.service.EncryptConfigService;
+import org.apache.seatunnel.engine.server.rest.service.JobInfoService;
+import org.apache.seatunnel.engine.server.rest.service.UpdateTagsService;
 import org.apache.seatunnel.engine.server.utils.RestUtil;
 
 import com.hazelcast.internal.ascii.TextCommandService;
 import com.hazelcast.internal.ascii.rest.HttpCommandProcessor;
 import com.hazelcast.internal.ascii.rest.HttpPostCommand;
-import com.hazelcast.internal.json.JsonObject;
-import com.hazelcast.internal.serialization.Data;
+import lombok.extern.slf4j.Slf4j;
 
-import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
 import static com.hazelcast.internal.ascii.rest.HttpStatusCode.SC_400;
 import static com.hazelcast.internal.ascii.rest.HttpStatusCode.SC_500;
-import static org.apache.seatunnel.engine.server.rest.RestConstant.STOP_JOB_URL;
-import static org.apache.seatunnel.engine.server.rest.RestConstant.SUBMIT_JOB_URL;
+import static org.apache.seatunnel.engine.server.rest.RestConstant.CONTEXT_PATH;
+import static org.apache.seatunnel.engine.server.rest.RestConstant.REST_URL_ENCRYPT_CONFIG;
+import static org.apache.seatunnel.engine.server.rest.RestConstant.REST_URL_STOP_JOB;
+import static org.apache.seatunnel.engine.server.rest.RestConstant.REST_URL_STOP_JOBS;
+import static org.apache.seatunnel.engine.server.rest.RestConstant.REST_URL_SUBMIT_JOB;
+import static org.apache.seatunnel.engine.server.rest.RestConstant.REST_URL_SUBMIT_JOBS;
+import static org.apache.seatunnel.engine.server.rest.RestConstant.REST_URL_UPDATE_TAGS;
 
+@Slf4j
 public class RestHttpPostCommandProcessor extends HttpCommandProcessor<HttpPostCommand> {
+
     private final Log4j2HttpPostCommandProcessor original;
+    private JobInfoService jobInfoService;
+    private EncryptConfigService encryptConfigService;
+    private UpdateTagsService updateTagsService;
 
     public RestHttpPostCommandProcessor(TextCommandService textCommandService) {
         this(textCommandService, new Log4j2HttpPostCommandProcessor(textCommandService));
+        this.jobInfoService = new JobInfoService(this.textCommandService.getNode().getNodeEngine());
+        this.encryptConfigService =
+                new EncryptConfigService(this.textCommandService.getNode().getNodeEngine());
+        this.updateTagsService =
+                new UpdateTagsService(this.textCommandService.getNode().getNodeEngine());
     }
 
     protected RestHttpPostCommandProcessor(
@@ -60,16 +65,29 @@ public class RestHttpPostCommandProcessor extends HttpCommandProcessor<HttpPostC
                 textCommandService,
                 textCommandService.getNode().getLogger(Log4j2HttpPostCommandProcessor.class));
         this.original = log4j2HttpPostCommandProcessor;
+        this.jobInfoService = new JobInfoService(this.textCommandService.getNode().getNodeEngine());
+        this.encryptConfigService =
+                new EncryptConfigService(this.textCommandService.getNode().getNodeEngine());
+        this.updateTagsService =
+                new UpdateTagsService(this.textCommandService.getNode().getNodeEngine());
     }
 
     @Override
     public void handle(HttpPostCommand httpPostCommand) {
         String uri = httpPostCommand.getURI();
         try {
-            if (uri.startsWith(SUBMIT_JOB_URL)) {
+            if (uri.startsWith(CONTEXT_PATH + REST_URL_SUBMIT_JOBS)) {
+                handleSubmitJobs(httpPostCommand);
+            } else if (uri.startsWith(CONTEXT_PATH + REST_URL_SUBMIT_JOB)) {
                 handleSubmitJob(httpPostCommand, uri);
-            } else if (uri.startsWith(STOP_JOB_URL)) {
-                handleStopJob(httpPostCommand, uri);
+            } else if (uri.startsWith(CONTEXT_PATH + REST_URL_STOP_JOBS)) {
+                handleStopJobs(httpPostCommand);
+            } else if (uri.startsWith(CONTEXT_PATH + REST_URL_STOP_JOB)) {
+                handleStopJob(httpPostCommand);
+            } else if (uri.startsWith(CONTEXT_PATH + REST_URL_ENCRYPT_CONFIG)) {
+                handleEncrypt(httpPostCommand);
+            } else if (uri.startsWith(CONTEXT_PATH + REST_URL_UPDATE_TAGS)) {
+                handleUpdateTags(httpPostCommand);
             } else {
                 original.handle(httpPostCommand);
             }
@@ -79,93 +97,44 @@ public class RestHttpPostCommandProcessor extends HttpCommandProcessor<HttpPostC
             logger.warning("An error occurred while handling request " + httpPostCommand, e);
             prepareResponse(SC_500, httpPostCommand, exceptionResponse(e));
         }
-
         this.textCommandService.sendResponse(httpPostCommand);
     }
 
-    private SeaTunnelServer getSeaTunnelServer() {
-        Map<String, Object> extensionServices =
-                this.textCommandService.getNode().getNodeExtension().createExtensionServices();
-        return (SeaTunnelServer) extensionServices.get(Constant.SEATUNNEL_SERVICE_NAME);
+    private void handleSubmitJobs(HttpPostCommand httpPostCommand) throws IllegalArgumentException {
+
+        prepareResponse(httpPostCommand, jobInfoService.submitJobs(httpPostCommand.getData()));
     }
 
     private void handleSubmitJob(HttpPostCommand httpPostCommand, String uri)
             throws IllegalArgumentException {
         Map<String, String> requestParams = new HashMap<>();
         RestUtil.buildRequestParams(requestParams, uri);
-        Config config = RestUtil.buildConfig(requestHandle(httpPostCommand));
-        JobConfig jobConfig = new JobConfig();
-        jobConfig.setName(requestParams.get(RestConstant.JOB_NAME));
-        JobImmutableInformationEnv jobImmutableInformationEnv =
-                new JobImmutableInformationEnv(
-                        jobConfig,
-                        config,
-                        textCommandService.getNode(),
-                        Boolean.parseBoolean(
-                                requestParams.get(RestConstant.IS_START_WITH_SAVE_POINT)),
-                        Long.parseLong(requestParams.get(RestConstant.JOB_ID)));
-        JobImmutableInformation jobImmutableInformation = jobImmutableInformationEnv.build();
-        CoordinatorService coordinatorService = getSeaTunnelServer().getCoordinatorService();
-        Data data =
-                textCommandService
-                        .getNode()
-                        .nodeEngine
-                        .getSerializationService()
-                        .toData(jobImmutableInformation);
-        PassiveCompletableFuture<Void> voidPassiveCompletableFuture =
-                coordinatorService.submitJob(
-                        Long.parseLong(jobConfig.getJobContext().getJobId()), data);
-        voidPassiveCompletableFuture.join();
-
-        Long jobId = jobImmutableInformationEnv.getJobId();
         this.prepareResponse(
                 httpPostCommand,
-                new JsonObject()
-                        .add(RestConstant.JOB_ID, jobId)
-                        .add(RestConstant.JOB_NAME, requestParams.get(RestConstant.JOB_NAME)));
+                jobInfoService.submitJob(requestParams, httpPostCommand.getData()));
     }
 
-    private void handleStopJob(HttpPostCommand httpPostCommand, String uri) {
-        Map<String, Object> map = JsonUtils.toMap(requestHandle(httpPostCommand));
-        boolean isStopWithSavePoint = false;
-        if (map.get(RestConstant.JOB_ID) == null) {
-            throw new IllegalArgumentException("jobId cannot be empty.");
-        }
-        long jobId = Long.parseLong(map.get(RestConstant.JOB_ID).toString());
-        if (map.get(RestConstant.IS_STOP_WITH_SAVE_POINT) != null) {
-            isStopWithSavePoint =
-                    Boolean.parseBoolean(map.get(RestConstant.IS_STOP_WITH_SAVE_POINT).toString());
-        }
+    private void handleStopJobs(HttpPostCommand command) {
 
-        CoordinatorService coordinatorService = getSeaTunnelServer().getCoordinatorService();
+        this.prepareResponse(command, jobInfoService.stopJobs(command.getData()));
+    }
 
-        if (isStopWithSavePoint) {
-            coordinatorService.savePoint(jobId);
-        } else {
-            coordinatorService.cancelJob(jobId);
-        }
+    private void handleStopJob(HttpPostCommand httpPostCommand) {
+        this.prepareResponse(httpPostCommand, jobInfoService.stopJob(httpPostCommand.getData()));
+    }
 
+    private void handleEncrypt(HttpPostCommand httpPostCommand) {
         this.prepareResponse(
-                httpPostCommand,
-                new JsonObject().add(RestConstant.JOB_ID, map.get(RestConstant.JOB_ID).toString()));
+                httpPostCommand, encryptConfigService.encryptConfig(httpPostCommand.getData()));
+    }
+
+    private void handleUpdateTags(HttpPostCommand httpPostCommand) {
+        this.prepareResponse(
+                httpPostCommand, updateTagsService.updateTags(httpPostCommand.getData()));
     }
 
     @Override
     public void handleRejection(HttpPostCommand httpPostCommand) {
         handle(httpPostCommand);
-    }
-
-    private JsonNode requestHandle(HttpPostCommand httpPostCommand) {
-        byte[] requestBody = httpPostCommand.getData();
-        if (requestBody.length == 0) {
-            throw new IllegalArgumentException("Request body is empty.");
-        }
-        JsonNode requestBodyJsonNode;
-        try {
-            requestBodyJsonNode = RestUtil.convertByteToJsonNode(requestBody);
-        } catch (IOException e) {
-            throw new IllegalArgumentException("Invalid JSON format in request body.");
-        }
-        return requestBodyJsonNode;
     }
 }

@@ -28,10 +28,11 @@ import org.apache.commons.lang3.StringUtils;
 import lombok.Data;
 import lombok.NonNull;
 
+import java.io.File;
 import java.io.Serializable;
 import java.util.Locale;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.seatunnel.shade.com.google.common.base.Preconditions.checkNotNull;
 
 @Data
 public class BaseFileSinkConfig implements DelimiterConfig, Serializable {
@@ -42,6 +43,9 @@ public class BaseFileSinkConfig implements DelimiterConfig, Serializable {
     protected int batchSize = BaseSinkConfig.BATCH_SIZE.defaultValue();
     protected String path;
     protected String fileNameExpression = BaseSinkConfig.FILE_NAME_EXPRESSION.defaultValue();
+    protected boolean singleFileMode = BaseSinkConfig.SINGLE_FILE_MODE.defaultValue();
+    protected boolean createEmptyFileWhenNoData =
+            BaseSinkConfig.CREATE_EMPTY_FILE_WHEN_NO_DATA.defaultValue();
     protected FileFormat fileFormat = FileFormat.TEXT;
     protected DateUtils.Formatter dateFormat = DateUtils.Formatter.YYYY_MM_DD;
     protected DateTimeUtils.Formatter datetimeFormat = DateTimeUtils.Formatter.YYYY_MM_DD_HH_MM_SS;
@@ -71,10 +75,23 @@ public class BaseFileSinkConfig implements DelimiterConfig, Serializable {
         }
         checkNotNull(path);
 
+        if (path.equals(File.separator)) {
+            this.path = "";
+        }
+
         if (config.hasPath(BaseSinkConfig.FILE_NAME_EXPRESSION.key())
                 && !StringUtils.isBlank(
                         config.getString(BaseSinkConfig.FILE_NAME_EXPRESSION.key()))) {
             this.fileNameExpression = config.getString(BaseSinkConfig.FILE_NAME_EXPRESSION.key());
+        }
+
+        if (config.hasPath(BaseSinkConfig.SINGLE_FILE_MODE.key())) {
+            this.singleFileMode = config.getBoolean(BaseSinkConfig.SINGLE_FILE_MODE.key());
+        }
+
+        if (config.hasPath(BaseSinkConfig.CREATE_EMPTY_FILE_WHEN_NO_DATA.key())) {
+            this.createEmptyFileWhenNoData =
+                    config.getBoolean(BaseSinkConfig.CREATE_EMPTY_FILE_WHEN_NO_DATA.key());
         }
 
         if (config.hasPath(BaseSinkConfig.FILE_FORMAT_TYPE.key())

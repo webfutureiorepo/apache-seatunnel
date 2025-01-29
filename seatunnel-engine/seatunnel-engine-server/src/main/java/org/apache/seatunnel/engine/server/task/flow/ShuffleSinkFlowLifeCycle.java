@@ -17,8 +17,9 @@
 
 package org.apache.seatunnel.engine.server.task.flow;
 
-import org.apache.seatunnel.api.table.event.SchemaChangeEvent;
+import org.apache.seatunnel.api.table.schema.event.SchemaChangeEvent;
 import org.apache.seatunnel.api.table.type.Record;
+import org.apache.seatunnel.engine.common.utils.concurrent.CompletableFuture;
 import org.apache.seatunnel.engine.core.dag.actions.ShuffleAction;
 import org.apache.seatunnel.engine.core.dag.actions.ShuffleStrategy;
 import org.apache.seatunnel.engine.server.checkpoint.ActionStateKey;
@@ -35,7 +36,6 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.Map;
 import java.util.Queue;
-import java.util.concurrent.CompletableFuture;
 
 @SuppressWarnings("MagicNumber")
 @Slf4j
@@ -78,7 +78,7 @@ public class ShuffleSinkFlowLifeCycle extends AbstractFlowLifeCycle
             shuffleFlush();
 
             Barrier barrier = (Barrier) record.getData();
-            if (barrier.prepareClose()) {
+            if (barrier.prepareClose(runningTask.getTaskLocation())) {
                 prepareClose = true;
             }
             if (barrier.snapshot()) {

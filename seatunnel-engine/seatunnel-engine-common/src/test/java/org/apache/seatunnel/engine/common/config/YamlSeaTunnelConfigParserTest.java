@@ -69,6 +69,17 @@ public class YamlSeaTunnelConfigParserTest {
                         .getStorage()
                         .getStoragePluginConfig()
                         .get("fs.defaultFS"));
+
+        Assertions.assertFalse(
+                config.getEngineConfig().getTelemetryConfig().getMetric().isEnabled());
+        Assertions.assertTrue(config.getEngineConfig().getHttpConfig().isEnabled());
+        Assertions.assertTrue(config.getEngineConfig().getHttpConfig().isEnableDynamicPort());
+        Assertions.assertEquals(8080, config.getEngineConfig().getHttpConfig().getPort());
+        Assertions.assertEquals(200, config.getEngineConfig().getHttpConfig().getPortRange());
+        Assertions.assertEquals(
+                30, config.getEngineConfig().getCoordinatorServiceConfig().getCoreThreadNum());
+        Assertions.assertEquals(
+                1000, config.getEngineConfig().getCoordinatorServiceConfig().getMaxThreadNum());
     }
 
     @Test
@@ -78,5 +89,11 @@ public class YamlSeaTunnelConfigParserTest {
         ClientConfig clientConfig = yamlClientConfigBuilder.build();
 
         Assertions.assertEquals("custmoize", clientConfig.getClusterName());
+        Assertions.assertEquals(
+                3000L,
+                clientConfig
+                        .getConnectionStrategyConfig()
+                        .getConnectionRetryConfig()
+                        .getClusterConnectTimeoutMillis());
     }
 }

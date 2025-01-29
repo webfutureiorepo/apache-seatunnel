@@ -23,7 +23,7 @@
     </parent>
 
     <artifactId>connector-jdbc-e2e-part-6</artifactId>
-    <name>SeaTunnel : E2E : Connector V2 : Jdbc : Part 2</name>
+    <name>SeaTunnel : E2E : Connector V2 : Jdbc : Part 6</name>
 
     <dependencies>
         <dependency>
@@ -45,6 +45,12 @@
         <dependency>
             <groupId>com.oracle.database.jdbc</groupId>
             <artifactId>ojdbc8</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/com.sap.cloud.db.jdbc/ngdbc -->
+        <dependency>
+            <groupId>com.sap.cloud.db.jdbc</groupId>
+            <artifactId>ngdbc</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

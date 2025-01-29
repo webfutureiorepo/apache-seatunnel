@@ -40,6 +40,8 @@ import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.Progressable;
 
+import lombok.extern.slf4j.Slf4j;
+
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -52,6 +54,7 @@ import java.net.URI;
  */
 @InterfaceAudience.Public
 @InterfaceStability.Stable
+@Slf4j
 public class SeaTunnelFTPFileSystem extends FileSystem {
     public static final Log LOG = LogFactory.getLog(SeaTunnelFTPFileSystem.class);
 
@@ -62,6 +65,8 @@ public class SeaTunnelFTPFileSystem extends FileSystem {
     public static final String FS_FTP_HOST = "fs.ftp.host";
     public static final String FS_FTP_HOST_PORT = "fs.ftp.host.port";
     public static final String FS_FTP_PASSWORD_PREFIX = "fs.ftp.password.";
+    public static final String FS_FTP_CONNECTION_MODE = "fs.ftp.connection.mode";
+
     public static final String E_SAME_DIRECTORY_ONLY = "only same directory renames are supported";
 
     private URI uri;
@@ -153,7 +158,34 @@ public class SeaTunnelFTPFileSystem extends FileSystem {
                             + "'");
         }
 
+        setFsFtpConnectionMode(
+                client, conf.get(FS_FTP_CONNECTION_MODE, FtpConnectionMode.ACTIVE_LOCAL.getMode()));
+
         return client;
+    }
+
+    /**
+     * Set FTP connection mode. *
+     *
+     * @param client FTPClient
+     * @param mode mode
+     */
+    private void setFsFtpConnectionMode(FTPClient client, String mode) {
+        switch (FtpConnectionMode.fromMode(mode)) {
+            case PASSIVE_LOCAL:
+                client.enterLocalPassiveMode();
+                break;
+            case ACTIVE_LOCAL:
+                client.enterLocalActiveMode();
+                break;
+            default:
+                log.warn(
+                        "Unsupported FTP connection mode: " + mode,
+                        " Using default FTP connection mode: "
+                                + FtpConnectionMode.ACTIVE_LOCAL.getMode());
+                client.enterLocalActiveMode();
+                break;
+        }
     }
 
     /**
@@ -310,6 +342,7 @@ public class SeaTunnelFTPFileSystem extends FileSystem {
         try {
             return getFileStatus(client, file) != null;
         } catch (FileNotFoundException fnfe) {
+            LOG.debug("File does not exist: " + file, fnfe);
             return false;
         }
     }
@@ -525,12 +558,18 @@ public class SeaTunnelFTPFileSystem extends FileSystem {
             if (created) {
                 String parentDir = parent.toUri().getPath();
                 client.changeWorkingDirectory(parentDir);
-                created = created && client.makeDirectory(pathName);
+                LOG.debug("Creating directory " + pathName);
+                created = client.makeDirectory(pathName);
             }
         } else if (isFile(client, absolute)) {
             throw new ParentNotDirectoryException(
                     String.format(
                             "Can't make directory for path %s since it is a file.", absolute));
+        } else {
+            LOG.debug("Skipping creation of existing directory " + file);
+        }
+        if (!created) {
+            LOG.debug("Failed to create " + file);
         }
         return created;
     }

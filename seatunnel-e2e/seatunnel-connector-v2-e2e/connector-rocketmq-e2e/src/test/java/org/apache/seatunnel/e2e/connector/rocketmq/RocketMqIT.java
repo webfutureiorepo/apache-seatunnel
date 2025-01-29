@@ -19,6 +19,7 @@ package org.apache.seatunnel.e2e.connector.rocketmq;
 
 import org.apache.seatunnel.shade.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.seatunnel.shade.com.fasterxml.jackson.databind.node.ObjectNode;
+import org.apache.seatunnel.shade.com.google.common.collect.Lists;
 
 import org.apache.seatunnel.api.table.type.ArrayType;
 import org.apache.seatunnel.api.table.type.BasicType;
@@ -37,7 +38,9 @@ import org.apache.seatunnel.connectors.seatunnel.rocketmq.exception.RocketMqConn
 import org.apache.seatunnel.connectors.seatunnel.rocketmq.serialize.DefaultSeaTunnelRowSerializer;
 import org.apache.seatunnel.e2e.common.TestResource;
 import org.apache.seatunnel.e2e.common.TestSuiteBase;
+import org.apache.seatunnel.e2e.common.container.EngineType;
 import org.apache.seatunnel.e2e.common.container.TestContainer;
+import org.apache.seatunnel.e2e.common.junit.DisabledOnContainer;
 import org.apache.seatunnel.engine.common.Constant;
 
 import org.apache.rocketmq.client.consumer.DefaultLitePullConsumer;
@@ -58,7 +61,6 @@ import org.testcontainers.containers.wait.strategy.HostPortWaitStrategy;
 import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.utility.DockerLoggerFactory;
 
-import com.google.common.collect.Lists;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 
@@ -68,10 +70,12 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.apache.seatunnel.e2e.connector.rocketmq.RocketMqContainer.NAMESRV_PORT;
@@ -143,6 +147,7 @@ public class RocketMqIT extends TestSuiteBase implements TestResource {
         DefaultSeaTunnelRowSerializer serializer =
                 new DefaultSeaTunnelRowSerializer(
                         "test_topic_source",
+                        null,
                         SEATUNNEL_ROW_TYPE,
                         DEFAULT_FORMAT,
                         DEFAULT_FIELD_DELIMITER);
@@ -179,7 +184,7 @@ public class RocketMqIT extends TestSuiteBase implements TestResource {
         Assertions.assertEquals(0, execResult.getExitCode(), execResult.getStderr());
 
         String topicName = "test_topic";
-        Map<String, String> data = getRocketMqConsumerData(topicName);
+        Map<String, RocketMqConsumerMessage> data = getRocketMqConsumerData(topicName);
         ObjectMapper objectMapper = new ObjectMapper();
         String key = data.keySet().iterator().next();
         ObjectNode objectNode = objectMapper.readValue(key, ObjectNode.class);
@@ -195,7 +200,7 @@ public class RocketMqIT extends TestSuiteBase implements TestResource {
                 container.executeJob("/rocketmq-text-sink_fake_to_rocketmq.conf");
         Assertions.assertEquals(0, execResult.getExitCode(), execResult.getStderr());
         String topicName = "test_text_topic";
-        Map<String, String> data = getRocketMqConsumerData(topicName);
+        Map<String, RocketMqConsumerMessage> data = getRocketMqConsumerData(topicName);
         Assertions.assertEquals(10, data.size());
     }
 
@@ -205,6 +210,7 @@ public class RocketMqIT extends TestSuiteBase implements TestResource {
         DefaultSeaTunnelRowSerializer serializer =
                 new DefaultSeaTunnelRowSerializer(
                         "test_topic_text",
+                        null,
                         SEATUNNEL_ROW_TYPE,
                         SchemaFormat.TEXT,
                         DEFAULT_FIELD_DELIMITER);
@@ -215,11 +221,34 @@ public class RocketMqIT extends TestSuiteBase implements TestResource {
     }
 
     @TestTemplate
+    @DisabledOnContainer(
+            value = {},
+            type = {EngineType.SPARK, EngineType.FLINK},
+            disabledReason = "flink and spark won't commit offset when batch job finished")
+    public void testSourceRocketMqTextToConsoleWithOffsetCheck(TestContainer container)
+            throws IOException, InterruptedException {
+        DefaultSeaTunnelRowSerializer serializer =
+                new DefaultSeaTunnelRowSerializer(
+                        "test_topic_text_offset_check",
+                        null,
+                        SEATUNNEL_ROW_TYPE,
+                        SchemaFormat.TEXT,
+                        DEFAULT_FIELD_DELIMITER);
+        generateTestData(
+                row -> serializer.serializeRow(row), "test_topic_text_offset_check", 0, 10);
+        Container.ExecResult execResult =
+                container.executeJob("/rocketmq-source_tex_with_offset_check.conf");
+        Assertions.assertEquals(0, execResult.getExitCode(), execResult.getStderr());
+        checkOffsetNoDiff("test_topic_text_offset_check", "SeaTunnel-Consumer-Group");
+    }
+
+    @TestTemplate
     public void testSourceRocketMqJsonToConsole(TestContainer container)
             throws IOException, InterruptedException {
         DefaultSeaTunnelRowSerializer serializer =
                 new DefaultSeaTunnelRowSerializer(
                         "test_topic_json",
+                        null,
                         SEATUNNEL_ROW_TYPE,
                         DEFAULT_FORMAT,
                         DEFAULT_FIELD_DELIMITER);
@@ -267,11 +296,31 @@ public class RocketMqIT extends TestSuiteBase implements TestResource {
         DefaultSeaTunnelRowSerializer serializer =
                 new DefaultSeaTunnelRowSerializer(
                         "test_topic_group",
+                        null,
                         SEATUNNEL_ROW_TYPE,
                         DEFAULT_FORMAT,
                         DEFAULT_FIELD_DELIMITER);
         generateTestData(row -> serializer.serializeRow(row), "test_topic_group", 100, 150);
         testRocketMqGroupOffsetsToConsole(container);
+    }
+
+    @TestTemplate
+    public void testSinkRocketMqMessageTag(TestContainer container)
+            throws IOException, InterruptedException {
+        Container.ExecResult execResult =
+                container.executeJob("/rocketmq-sink_fake_to_rocketmq_message_tag.conf");
+        Assertions.assertEquals(0, execResult.getExitCode(), execResult.getStderr());
+
+        String topicName = "test_topic_message_tag";
+        String tag = "test_tag";
+        Map<String, RocketMqConsumerMessage> data = getRocketMqConsumerData(topicName);
+        ObjectMapper objectMapper = new ObjectMapper();
+        String key = data.keySet().iterator().next();
+        ObjectNode objectNode = objectMapper.readValue(key, ObjectNode.class);
+        Assertions.assertTrue(objectNode.has("c_map"));
+        Assertions.assertTrue(objectNode.has("c_string"));
+        Assertions.assertEquals(10, data.size());
+        Assertions.assertEquals(tag, data.get(key).getTag());
     }
 
     public void testRocketMqGroupOffsetsToConsole(TestContainer container)
@@ -309,8 +358,8 @@ public class RocketMqIT extends TestSuiteBase implements TestResource {
         }
     }
 
-    private Map<String, String> getRocketMqConsumerData(String topicName) {
-        Map<String, String> data = new HashMap<>();
+    private Map<String, RocketMqConsumerMessage> getRocketMqConsumerData(String topicName) {
+        Map<String, RocketMqConsumerMessage> data = new HashMap<>();
         try {
             DefaultLitePullConsumer consumer =
                     RocketMqAdminUtil.initDefaultLitePullConsumer(newConfiguration(), false);
@@ -348,9 +397,11 @@ public class RocketMqIT extends TestSuiteBase implements TestResource {
                     break;
                 }
                 for (MessageExt message : messages) {
-                    data.put(
-                            message.getKeys(),
-                            new String(message.getBody(), StandardCharsets.UTF_8));
+                    RocketMqConsumerMessage consumerMessage =
+                            new RocketMqConsumerMessage(
+                                    new String(message.getBody(), StandardCharsets.UTF_8),
+                                    message.getTags());
+                    data.put(message.getKeys(), consumerMessage);
                     consumer.getOffsetStore()
                             .updateConsumeOffsetToBroker(
                                     new MessageQueue(
@@ -373,6 +424,26 @@ public class RocketMqIT extends TestSuiteBase implements TestResource {
             throw new RuntimeException(ex);
         }
         return data;
+    }
+
+    private void checkOffsetNoDiff(String topicName, String consumerGroup) {
+        RocketMqBaseConfiguration config = newConfiguration();
+        config.setGroupId(consumerGroup);
+        List<Map<MessageQueue, TopicOffset>> offsetTopics =
+                RocketMqAdminUtil.offsetTopics(config, Arrays.asList(topicName));
+        Map<MessageQueue, TopicOffset> offsetMap = offsetTopics.get(0);
+        Set<MessageQueue> messageQueues = offsetMap.keySet();
+        Map<MessageQueue, Long> currentOffsets =
+                RocketMqAdminUtil.currentOffsets(config, Arrays.asList(topicName), messageQueues);
+        for (Map.Entry<MessageQueue, TopicOffset> offsetEntry : offsetMap.entrySet()) {
+            MessageQueue messageQueue = offsetEntry.getKey();
+            long maxOffset = offsetEntry.getValue().getMaxOffset();
+            Long consumeOffset = currentOffsets.get(messageQueue);
+            Assertions.assertEquals(
+                    maxOffset,
+                    consumeOffset,
+                    "Offset different,maxOffset=" + maxOffset + ",consumeOffset=" + consumeOffset);
+        }
     }
 
     public RocketMqBaseConfiguration newConfiguration() {

@@ -24,6 +24,7 @@ import org.apache.seatunnel.api.source.SourceSplit;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.translation.source.BaseSourceFunction;
 import org.apache.seatunnel.translation.source.CoordinatedSource;
+import org.apache.seatunnel.translation.spark.execution.MultiTableManager;
 import org.apache.seatunnel.translation.spark.serialization.InternalRowCollector;
 import org.apache.seatunnel.translation.spark.source.state.ReaderState;
 
@@ -40,25 +41,32 @@ public class CoordinatedMicroBatchPartitionReader extends ParallelMicroBatchPart
     public CoordinatedMicroBatchPartitionReader(
             SeaTunnelSource<SeaTunnelRow, ?, ?> source,
             Integer parallelism,
+            String jobId,
             Integer subtaskId,
             Integer checkpointId,
             Integer checkpointInterval,
             String checkpointPath,
             String hdfsRoot,
-            String hdfsUser) {
+            String hdfsUser,
+            Map<String, String> envOptions,
+            MultiTableManager multiTableManager) {
         super(
                 source,
                 parallelism,
+                jobId,
                 subtaskId,
                 checkpointId,
                 checkpointInterval,
                 checkpointPath,
                 hdfsRoot,
-                hdfsUser);
+                hdfsUser,
+                envOptions,
+                multiTableManager);
         this.collectorMap = new HashMap<>(parallelism);
         for (int i = 0; i < parallelism; i++) {
             collectorMap.put(
-                    i, new InternalRowCollector(handover, new Object(), source.getProducedType()));
+                    i,
+                    multiTableManager.getInternalRowCollector(handover, new Object(), envOptions));
         }
     }
 
@@ -122,7 +130,7 @@ public class CoordinatedMicroBatchPartitionReader extends ParallelMicroBatchPart
 
     @Override
     protected BaseSourceFunction<SeaTunnelRow> createInternalSource() {
-        return new InternalCoordinatedSource<>(source, null, parallelism);
+        return new InternalCoordinatedSource<>(source, null, parallelism, jobId);
     }
 
     public class InternalCoordinatedSource<SplitT extends SourceSplit, StateT extends Serializable>
@@ -131,8 +139,9 @@ public class CoordinatedMicroBatchPartitionReader extends ParallelMicroBatchPart
         public InternalCoordinatedSource(
                 SeaTunnelSource<SeaTunnelRow, SplitT, StateT> source,
                 Map<Integer, List<byte[]>> restoredState,
-                int parallelism) {
-            super(source, restoredState, parallelism);
+                int parallelism,
+                String jobId) {
+            super(source, restoredState, parallelism, jobId);
         }
 
         @Override
@@ -151,7 +160,20 @@ public class CoordinatedMicroBatchPartitionReader extends ParallelMicroBatchPart
                                             while (flag.get()) {
                                                 try {
                                                     reader.pollNext(rowCollector);
-                                                    Thread.sleep(SLEEP_TIME_INTERVAL);
+                                                    if (rowCollector.isEmptyThisPollNext()) {
+                                                        Thread.sleep(100);
+                                                    } else {
+                                                        rowCollector.resetEmptyThisPollNext();
+                                                        /**
+                                                         * sleep(0) is used to prevent the current
+                                                         * thread from occupying CPU resources for a
+                                                         * long time, thus blocking the checkpoint
+                                                         * thread for a long time. It is mentioned
+                                                         * in this
+                                                         * https://github.com/apache/seatunnel/issues/5694
+                                                         */
+                                                        Thread.sleep(0L);
+                                                    }
                                                 } catch (Exception e) {
                                                     this.running = false;
                                                     flag.set(false);

@@ -24,7 +24,7 @@ Optional jdbc drivers:
 - `org.postgresql.Driver`
 - `com.pivotal.jdbc.GreenplumDriver`
 
-Warn: for license compliance, if you use `GreenplumDriver` the have to provide Greenplum JDBC driver yourself, e.g. copy greenplum-xxx.jar to $SEATNUNNEL_HOME/lib for Standalone.
+Warn: for license compliance, if you use `GreenplumDriver` the have to provide Greenplum JDBC driver yourself, e.g. copy greenplum-xxx.jar to $SEATUNNEL_HOME/lib for Standalone.
 
 :::
 
@@ -32,7 +32,7 @@ Warn: for license compliance, if you use `GreenplumDriver` the have to provide G
 
 ### common options
 
-Source plugin common parameters, please refer to [Source Common Options](common-options.md) for details.
+Source plugin common parameters, please refer to [Source Common Options](../source-common-options.md) for details.
 
 ## Changelog
 

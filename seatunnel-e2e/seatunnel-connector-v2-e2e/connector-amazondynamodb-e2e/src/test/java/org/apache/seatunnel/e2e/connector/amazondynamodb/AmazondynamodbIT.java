@@ -17,6 +17,8 @@
 
 package org.apache.seatunnel.e2e.connector.amazondynamodb;
 
+import org.apache.seatunnel.shade.com.google.common.collect.Lists;
+
 import org.apache.seatunnel.api.table.type.ArrayType;
 import org.apache.seatunnel.api.table.type.BasicType;
 import org.apache.seatunnel.api.table.type.DecimalType;
@@ -40,7 +42,6 @@ import org.testcontainers.containers.output.Slf4jLogConsumer;
 import org.testcontainers.lifecycle.Startables;
 import org.testcontainers.utility.DockerLoggerFactory;
 
-import com.google.common.collect.Lists;
 import lombok.extern.slf4j.Slf4j;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
@@ -94,9 +95,11 @@ public class AmazondynamodbIT extends TestSuiteBase implements TestResource {
 
     @TestTemplate
     public void testAmazondynamodb(TestContainer container) throws Exception {
+        assertHasData(SOURCE_TABLE);
         Container.ExecResult execResult = container.executeJob(AMAZONDYNAMODB_JOB_CONFIG);
         Assertions.assertEquals(0, execResult.getExitCode());
-        assertHasData();
+        assertHasData(SOURCE_TABLE);
+        assertHasData(SINK_TABLE);
         compareResult();
         clearSinkTable();
     }
@@ -168,10 +171,12 @@ public class AmazondynamodbIT extends TestSuiteBase implements TestResource {
         createTable(dynamoDbClient, SINK_TABLE);
     }
 
-    private void assertHasData() {
+    private void assertHasData(String tableName) {
         ScanResponse scan =
-                dynamoDbClient.scan(ScanRequest.builder().tableName(SINK_TABLE).build());
-        Assertions.assertTrue(scan.hasItems(), "sink table is empty.");
+                dynamoDbClient.scan(
+                        ScanRequest.builder().tableName(tableName).consistentRead(true).build());
+        Assertions.assertTrue(
+                !scan.items().isEmpty(), String.format("table %s is empty.", tableName));
     }
 
     private void compareResult() {
@@ -365,7 +370,7 @@ public class AmazondynamodbIT extends TestSuiteBase implements TestResource {
                 return AttributeValue.builder().m(resultMap).build();
             case L:
                 ArrayType<?, ?> arrayType = (ArrayType<?, ?>) seaTunnelDataType;
-                BasicType<?> elementType = arrayType.getElementType();
+                SeaTunnelDataType<?> elementType = arrayType.getElementType();
                 Object[] l = (Object[]) value;
                 return AttributeValue.builder()
                         .l(

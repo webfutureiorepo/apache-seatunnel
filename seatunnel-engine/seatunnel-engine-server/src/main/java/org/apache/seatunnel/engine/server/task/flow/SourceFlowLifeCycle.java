@@ -18,17 +18,22 @@
 package org.apache.seatunnel.engine.server.task.flow;
 
 import org.apache.seatunnel.api.common.metrics.MetricsContext;
+import org.apache.seatunnel.api.event.EventListener;
 import org.apache.seatunnel.api.serialization.Serializer;
 import org.apache.seatunnel.api.source.SourceEvent;
 import org.apache.seatunnel.api.source.SourceReader;
 import org.apache.seatunnel.api.source.SourceSplit;
+import org.apache.seatunnel.api.source.event.ReaderCloseEvent;
+import org.apache.seatunnel.api.source.event.ReaderOpenEvent;
 import org.apache.seatunnel.api.table.type.Record;
+import org.apache.seatunnel.engine.common.utils.concurrent.CompletableFuture;
 import org.apache.seatunnel.engine.core.checkpoint.CheckpointType;
 import org.apache.seatunnel.engine.core.checkpoint.InternalCheckpointListener;
 import org.apache.seatunnel.engine.core.dag.actions.SourceAction;
 import org.apache.seatunnel.engine.server.checkpoint.ActionStateKey;
 import org.apache.seatunnel.engine.server.checkpoint.ActionSubtaskState;
 import org.apache.seatunnel.engine.server.checkpoint.CheckpointBarrier;
+import org.apache.seatunnel.engine.server.event.JobEventListener;
 import org.apache.seatunnel.engine.server.execution.TaskLocation;
 import org.apache.seatunnel.engine.server.task.SeaTunnelSourceCollector;
 import org.apache.seatunnel.engine.server.task.SeaTunnelTask;
@@ -53,7 +58,6 @@ import java.io.Serializable;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
@@ -80,6 +84,8 @@ public class SourceFlowLifeCycle<T, SplitT extends SourceSplit> extends ActionFl
     private SeaTunnelSourceCollector<T> collector;
 
     private final MetricsContext metricsContext;
+    private final EventListener eventListener;
+    private SourceReader.Context context;
 
     private final AtomicReference<SchemaChangePhase> schemaChangePhase = new AtomicReference<>();
 
@@ -97,6 +103,8 @@ public class SourceFlowLifeCycle<T, SplitT extends SourceSplit> extends ActionFl
         this.enumeratorTaskLocation = enumeratorTaskLocation;
         this.currentTaskLocation = currentTaskLocation;
         this.metricsContext = metricsContext;
+        this.eventListener =
+                new JobEventListener(currentTaskLocation, runningTask.getExecutionContext());
     }
 
     public void setCollector(SeaTunnelSourceCollector<T> collector) {
@@ -106,20 +114,20 @@ public class SourceFlowLifeCycle<T, SplitT extends SourceSplit> extends ActionFl
     @Override
     public void init() throws Exception {
         this.splitSerializer = sourceAction.getSource().getSplitSerializer();
-        this.reader =
-                sourceAction
-                        .getSource()
-                        .createReader(
-                                new SourceReaderContext(
-                                        indexID,
-                                        sourceAction.getSource().getBoundedness(),
-                                        this,
-                                        metricsContext));
+        this.context =
+                new SourceReaderContext(
+                        indexID,
+                        sourceAction.getSource().getBoundedness(),
+                        this,
+                        metricsContext,
+                        eventListener);
+        this.reader = sourceAction.getSource().createReader(context);
         this.enumeratorTaskAddress = getEnumeratorTaskAddress();
     }
 
     @Override
     public void open() throws Exception {
+        context.getEventListener().onEvent(new ReaderOpenEvent());
         reader.open();
         register();
     }
@@ -134,6 +142,7 @@ public class SourceFlowLifeCycle<T, SplitT extends SourceSplit> extends ActionFl
 
     @Override
     public void close() throws IOException {
+        context.getEventListener().onEvent(new ReaderCloseEvent());
         reader.close();
         super.close();
     }
@@ -152,6 +161,14 @@ public class SourceFlowLifeCycle<T, SplitT extends SourceSplit> extends ActionFl
                 Thread.sleep(100);
             } else {
                 collector.resetEmptyThisPollNext();
+                /**
+                 * The current thread obtain a checkpoint lock in the method {@link
+                 * SourceReader#pollNext(Collector)}. When trigger the checkpoint or savepoint,
+                 * other threads try to obtain the lock in the method {@link
+                 * SourceFlowLifeCycle#triggerBarrier(Barrier)}. When high CPU load, checkpoint
+                 * process may be blocked as long time. So we need sleep to free the CPU.
+                 */
+                Thread.sleep(0L);
             }
 
             if (collector.captureSchemaChangeBeforeCheckpointSignal()) {
@@ -160,8 +177,8 @@ public class SourceFlowLifeCycle<T, SplitT extends SourceSplit> extends ActionFl
                             "previous schema changes in progress, schemaChangePhase: "
                                     + schemaChangePhase.get());
                 }
-                runningTask.triggerSchemaChangeBeforeCheckpoint().get();
                 schemaChangePhase.set(SchemaChangePhase.createBeforePhase());
+                runningTask.triggerSchemaChangeBeforeCheckpoint().get();
                 log.info("triggered schema-change-before checkpoint, stopping collect data");
             } else if (collector.captureSchemaChangeAfterCheckpointSignal()) {
                 if (schemaChangePhase.get() != null) {
@@ -169,8 +186,8 @@ public class SourceFlowLifeCycle<T, SplitT extends SourceSplit> extends ActionFl
                             "previous schema changes in progress, schemaChangePhase: "
                                     + schemaChangePhase.get());
                 }
-                runningTask.triggerSchemaChangeAfterCheckpoint().get();
                 schemaChangePhase.set(SchemaChangePhase.createAfterPhase());
+                runningTask.triggerSchemaChangeAfterCheckpoint().get();
                 log.info("triggered schema-change-after checkpoint, stopping collect data");
             }
         } else {
@@ -254,7 +271,7 @@ public class SourceFlowLifeCycle<T, SplitT extends SourceSplit> extends ActionFl
 
         // Block the reader from adding barrier to the collector.
         synchronized (collector.getCheckpointLock()) {
-            if (barrier.prepareClose()) {
+            if (barrier.prepareClose(this.currentTaskLocation)) {
                 this.prepareClose = true;
             }
             if (barrier.snapshot()) {
@@ -276,25 +293,32 @@ public class SourceFlowLifeCycle<T, SplitT extends SourceSplit> extends ActionFl
                 currentTaskLocation);
 
         CheckpointType checkpointType = ((CheckpointBarrier) barrier).getCheckpointType();
-        if (schemaChanging() && checkpointType.isSchemaChangeCheckpoint()) {
-            if (checkpointType.isSchemaChangeBeforeCheckpoint()
-                    && schemaChangePhase.get().isBeforePhase()) {
-                schemaChangePhase.get().setCheckpointId(barrier.getId());
-            } else if (checkpointType.isSchemaChangeAfterCheckpoint()
-                    && schemaChangePhase.get().isAfterPhase()) {
-                schemaChangePhase.get().setCheckpointId(barrier.getId());
+        if (checkpointType.isSchemaChangeCheckpoint()) {
+            if (schemaChanging()) {
+                if (checkpointType.isSchemaChangeBeforeCheckpoint()
+                        && schemaChangePhase.get().isBeforePhase()) {
+                    schemaChangePhase.get().setCheckpointId(barrier.getId());
+                } else if (checkpointType.isSchemaChangeAfterCheckpoint()
+                        && schemaChangePhase.get().isAfterPhase()) {
+                    schemaChangePhase.get().setCheckpointId(barrier.getId());
+                } else {
+                    throw new IllegalStateException(
+                            String.format(
+                                    "schema-change checkpoint[%s,%s] and phase[%s] is not matched",
+                                    barrier.getId(),
+                                    checkpointType,
+                                    schemaChangePhase.get().getPhase()));
+                }
+                log.info(
+                        "lock checkpoint[{}] waiting for complete..., phase: [{}]",
+                        barrier.getId(),
+                        schemaChangePhase.get().getPhase());
             } else {
-                throw new IllegalStateException(
-                        String.format(
-                                "schema-change checkpoint[%s,%s] and phase[%s] is not matched",
-                                barrier.getId(),
-                                checkpointType,
-                                schemaChangePhase.get().getPhase()));
+                log.debug(
+                        "Ignore schema-change checkpoint[{}] on idle task, phase: [{}]",
+                        barrier.getId(),
+                        checkpointType);
             }
-            log.info(
-                    "lock checkpoint[{}] waiting for complete..., phase: [{}]",
-                    barrier.getId(),
-                    schemaChangePhase.get().getPhase());
         }
     }
 

@@ -19,7 +19,9 @@ package org.apache.seatunnel.engine.server.task;
 
 import org.apache.seatunnel.api.serialization.Serializer;
 import org.apache.seatunnel.api.sink.SinkAggregatedCommitter;
+import org.apache.seatunnel.engine.common.utils.concurrent.CompletableFuture;
 import org.apache.seatunnel.engine.core.dag.actions.SinkAction;
+import org.apache.seatunnel.engine.core.job.ConnectorJarIdentifier;
 import org.apache.seatunnel.engine.server.checkpoint.ActionStateKey;
 import org.apache.seatunnel.engine.server.checkpoint.ActionSubtaskState;
 import org.apache.seatunnel.engine.server.checkpoint.CheckpointBarrier;
@@ -48,7 +50,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -196,6 +197,12 @@ public class SinkAggregatedCommitterTask<CommandInfoT, AggregatedCommitInfoT>
         completableFuture.complete(null);
     }
 
+    private long getClosedWriters(Barrier barrier) {
+        return barrier.closedTasks().stream()
+                .filter(task -> writerAddressMap.containsKey(task.getTaskID()))
+                .count();
+    }
+
     @Override
     public void triggerBarrier(Barrier barrier) throws Exception {
         long startTime = System.currentTimeMillis();
@@ -204,10 +211,11 @@ public class SinkAggregatedCommitterTask<CommandInfoT, AggregatedCommitInfoT>
         Integer count =
                 checkpointBarrierCounter.compute(
                         barrier.getId(), (id, num) -> num == null ? 1 : ++num);
-        if (count != maxWriterSize) {
+
+        if (count != (maxWriterSize - getClosedWriters(barrier))) {
             return;
         }
-        if (barrier.prepareClose()) {
+        if (barrier.prepareClose(this.taskLocation)) {
             this.prepareCloseStatus = true;
             this.prepareCloseBarrierId.set(barrier.getId());
         }
@@ -285,6 +293,11 @@ public class SinkAggregatedCommitterTask<CommandInfoT, AggregatedCommitInfoT>
     @Override
     public Set<URL> getJarsUrl() {
         return new HashSet<>(sink.getJarUrls());
+    }
+
+    @Override
+    public Set<ConnectorJarIdentifier> getConnectorPluginJars() {
+        return new HashSet<>(sink.getConnectorJarIdentifiers());
     }
 
     @Override

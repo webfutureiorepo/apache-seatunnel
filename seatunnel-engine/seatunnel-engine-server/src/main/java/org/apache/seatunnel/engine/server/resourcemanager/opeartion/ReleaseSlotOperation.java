@@ -17,21 +17,27 @@
 
 package org.apache.seatunnel.engine.server.resourcemanager.opeartion;
 
+import org.apache.seatunnel.common.utils.ExceptionUtils;
 import org.apache.seatunnel.engine.server.SeaTunnelServer;
 import org.apache.seatunnel.engine.server.resourcemanager.resource.SlotProfile;
+import org.apache.seatunnel.engine.server.resourcemanager.worker.WorkerProfile;
 import org.apache.seatunnel.engine.server.serializable.ResourceDataSerializerHook;
+import org.apache.seatunnel.engine.server.service.slot.WrongTargetSlotException;
+import org.apache.seatunnel.engine.server.task.operation.TracingOperation;
 
 import com.hazelcast.nio.ObjectDataInput;
 import com.hazelcast.nio.ObjectDataOutput;
 import com.hazelcast.nio.serialization.IdentifiedDataSerializable;
-import com.hazelcast.spi.impl.operationservice.Operation;
+import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
 
-public class ReleaseSlotOperation extends Operation implements IdentifiedDataSerializable {
+@Slf4j
+public class ReleaseSlotOperation extends TracingOperation implements IdentifiedDataSerializable {
 
     private long jobID;
     private SlotProfile slotProfile;
+    private WorkerProfile result;
 
     public ReleaseSlotOperation() {}
 
@@ -41,19 +47,35 @@ public class ReleaseSlotOperation extends Operation implements IdentifiedDataSer
     }
 
     @Override
-    public void run() throws Exception {
+    public void runInternal() throws Exception {
         SeaTunnelServer server = getService();
-        server.getSlotService().releaseSlot(jobID, slotProfile);
+        try {
+            server.getSlotService().releaseSlot(jobID, slotProfile);
+        } catch (WrongTargetSlotException ignore) {
+            log.warn(
+                    "wrong target release operation with job {} and slot profile {}, exception: {}",
+                    jobID,
+                    slotProfile,
+                    ExceptionUtils.getMessage(ignore));
+        }
+        result = server.getSlotService().getWorkerProfile();
+    }
+
+    @Override
+    public Object getResponse() {
+        return result;
     }
 
     @Override
     protected void writeInternal(ObjectDataOutput out) throws IOException {
+        super.writeInternal(out);
         out.writeObject(slotProfile);
         out.writeLong(jobID);
     }
 
     @Override
     protected void readInternal(ObjectDataInput in) throws IOException {
+        super.readInternal(in);
         slotProfile = in.readObject();
         jobID = in.readLong();
     }

@@ -17,12 +17,15 @@
 
 package org.apache.seatunnel.connectors.seatunnel.elasticsearch.catalog;
 
-import org.apache.seatunnel.shade.com.typesafe.config.Config;
+import org.apache.seatunnel.shade.com.google.common.collect.Lists;
 
+import org.apache.seatunnel.api.configuration.ReadonlyConfig;
 import org.apache.seatunnel.api.configuration.util.ConfigUtil;
 import org.apache.seatunnel.api.table.catalog.Catalog;
 import org.apache.seatunnel.api.table.catalog.CatalogTable;
+import org.apache.seatunnel.api.table.catalog.InfoPreviewResult;
 import org.apache.seatunnel.api.table.catalog.PhysicalColumn;
+import org.apache.seatunnel.api.table.catalog.PreviewResult;
 import org.apache.seatunnel.api.table.catalog.TableIdentifier;
 import org.apache.seatunnel.api.table.catalog.TablePath;
 import org.apache.seatunnel.api.table.catalog.TableSchema;
@@ -31,49 +34,52 @@ import org.apache.seatunnel.api.table.catalog.exception.DatabaseAlreadyExistExce
 import org.apache.seatunnel.api.table.catalog.exception.DatabaseNotExistException;
 import org.apache.seatunnel.api.table.catalog.exception.TableAlreadyExistException;
 import org.apache.seatunnel.api.table.catalog.exception.TableNotExistException;
+import org.apache.seatunnel.api.table.converter.BasicTypeDefine;
 import org.apache.seatunnel.connectors.seatunnel.elasticsearch.client.EsRestClient;
+import org.apache.seatunnel.connectors.seatunnel.elasticsearch.client.EsType;
 import org.apache.seatunnel.connectors.seatunnel.elasticsearch.dto.ElasticsearchClusterInfo;
 import org.apache.seatunnel.connectors.seatunnel.elasticsearch.dto.source.IndexDocsCount;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.collect.Lists;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.seatunnel.shade.com.google.common.base.Preconditions.checkNotNull;
 
 /**
  * Elasticsearch catalog implementation.
  *
  * <p>In ElasticSearch, we use the index as the database and table.
  */
+@Slf4j
 public class ElasticSearchCatalog implements Catalog {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ElasticSearchCatalog.class);
 
     private final String catalogName;
     private final String defaultDatabase;
-    private final Config pluginConfig;
+    private final ReadonlyConfig config;
 
     private EsRestClient esRestClient;
 
     // todo: do we need default database?
-    public ElasticSearchCatalog(
-            String catalogName, String defaultDatabase, Config elasticSearchConfig) {
+    public ElasticSearchCatalog(String catalogName, String defaultDatabase, ReadonlyConfig config) {
         this.catalogName = checkNotNull(catalogName, "catalogName cannot be null");
         this.defaultDatabase = defaultDatabase;
-        this.pluginConfig = checkNotNull(elasticSearchConfig, "elasticSearchConfig cannot be null");
+        this.config = checkNotNull(config, "elasticSearchConfig cannot be null");
     }
 
     @Override
     public void open() throws CatalogException {
         try {
-            esRestClient = EsRestClient.createInstance(pluginConfig);
+            esRestClient = EsRestClient.createInstance(config);
             ElasticsearchClusterInfo elasticsearchClusterInfo = esRestClient.getClusterInfo();
             if (LOGGER.isDebugEnabled()) {
                 LOGGER.debug(
@@ -92,6 +98,11 @@ public class ElasticSearchCatalog implements Catalog {
     }
 
     @Override
+    public String name() {
+        return catalogName;
+    }
+
+    @Override
     public String getDefaultDatabase() throws CatalogException {
         return defaultDatabase;
     }
@@ -100,14 +111,14 @@ public class ElasticSearchCatalog implements Catalog {
     public boolean databaseExists(String databaseName) throws CatalogException {
         // check if the index exist
         try {
-            List<IndexDocsCount> indexDocsCount = esRestClient.getIndexDocsCount(databaseName);
-            return true;
+            return esRestClient.checkIndexExist(databaseName);
         } catch (Exception e) {
-            throw new CatalogException(
+            log.error(
                     String.format(
                             "Failed to check if catalog %s database %s exists",
                             catalogName, databaseName),
                     e);
+            return false;
         }
     }
 
@@ -137,23 +148,24 @@ public class ElasticSearchCatalog implements Catalog {
             throws CatalogException, TableNotExistException {
         // Get the index mapping?
         checkNotNull(tablePath, "tablePath cannot be null");
-        ElasticSearchDataTypeConvertor elasticSearchDataTypeConvertor =
-                new ElasticSearchDataTypeConvertor();
         TableSchema.Builder builder = TableSchema.builder();
-        Map<String, String> fieldTypeMapping =
+        Map<String, BasicTypeDefine<EsType>> fieldTypeMapping =
                 esRestClient.getFieldTypeMapping(tablePath.getTableName(), Collections.emptyList());
-        fieldTypeMapping.forEach(
-                (fieldName, fieldType) -> {
+        buildColumnsWithErrorCheck(
+                tablePath,
+                builder,
+                fieldTypeMapping.entrySet().iterator(),
+                nameAndType -> {
                     // todo: we need to add a new type TEXT or add length in STRING type
-                    PhysicalColumn physicalColumn =
-                            PhysicalColumn.of(
-                                    fieldName,
-                                    elasticSearchDataTypeConvertor.toSeaTunnelType(fieldType),
-                                    null,
-                                    true,
-                                    null,
-                                    null);
-                    builder.column(physicalColumn);
+                    return PhysicalColumn.of(
+                            nameAndType.getKey(),
+                            ElasticSearchTypeConverter.INSTANCE
+                                    .convert(nameAndType.getValue())
+                                    .getDataType(),
+                            (Long) null,
+                            true,
+                            null,
+                            null);
                 });
 
         return CatalogTable.of(
@@ -171,11 +183,10 @@ public class ElasticSearchCatalog implements Catalog {
         // Create the index
         checkNotNull(tablePath, "tablePath cannot be null");
         if (tableExists(tablePath)) {
-            if (ignoreIfExists) {
-                return;
-            } else {
-                throw new TableAlreadyExistException(catalogName, tablePath, null);
+            if (!ignoreIfExists) {
+                throw new TableAlreadyExistException(catalogName, tablePath);
             }
+            return;
         }
         esRestClient.createIndex(tablePath.getTableName());
     }
@@ -184,8 +195,11 @@ public class ElasticSearchCatalog implements Catalog {
     public void dropTable(TablePath tablePath, boolean ignoreIfNotExists)
             throws TableNotExistException, CatalogException {
         checkNotNull(tablePath);
-        if (!tableExists(tablePath) && !ignoreIfNotExists) {
-            throw new TableNotExistException(catalogName, tablePath);
+        if (!tableExists(tablePath)) {
+            if (!ignoreIfNotExists) {
+                throw new TableNotExistException(catalogName, tablePath);
+            }
+            return;
         }
         try {
             esRestClient.dropIndex(tablePath.getTableName());
@@ -201,13 +215,33 @@ public class ElasticSearchCatalog implements Catalog {
     @Override
     public void createDatabase(TablePath tablePath, boolean ignoreIfExists)
             throws DatabaseAlreadyExistException, CatalogException {
-        createTable(tablePath, null, ignoreIfExists);
+        try {
+            createTable(tablePath, null, ignoreIfExists);
+        } catch (TableAlreadyExistException ex) {
+            throw new DatabaseAlreadyExistException(catalogName, tablePath.getDatabaseName());
+        }
     }
 
     @Override
     public void dropDatabase(TablePath tablePath, boolean ignoreIfNotExists)
             throws DatabaseNotExistException, CatalogException {
-        dropTable(tablePath, ignoreIfNotExists);
+        try {
+            dropTable(tablePath, ignoreIfNotExists);
+        } catch (TableNotExistException ex) {
+            throw new DatabaseNotExistException(catalogName, tablePath.getDatabaseName());
+        }
+    }
+
+    @Override
+    public void truncateTable(TablePath tablePath, boolean ignoreIfNotExists) {
+        esRestClient.clearIndexData(tablePath.getTableName());
+    }
+
+    @Override
+    public boolean isExistsData(TablePath tablePath) {
+        final List<IndexDocsCount> indexDocsCount =
+                esRestClient.getIndexDocsCount(tablePath.getTableName());
+        return indexDocsCount.get(0).getDocsCount() > 0;
     }
 
     private Map<String, String> buildTableOptions(TablePath tablePath) {
@@ -217,5 +251,23 @@ public class ElasticSearchCatalog implements Catalog {
         // bootstrapt servers here?
         options.put("config", ConfigUtil.convertToJsonString(tablePath));
         return options;
+    }
+
+    @Override
+    public PreviewResult previewAction(
+            ActionType actionType, TablePath tablePath, Optional<CatalogTable> catalogTable) {
+        if (actionType == ActionType.CREATE_TABLE) {
+            return new InfoPreviewResult("create index " + tablePath.getTableName());
+        } else if (actionType == ActionType.DROP_TABLE) {
+            return new InfoPreviewResult("delete index " + tablePath.getTableName());
+        } else if (actionType == ActionType.TRUNCATE_TABLE) {
+            return new InfoPreviewResult("delete and create index " + tablePath.getTableName());
+        } else if (actionType == ActionType.CREATE_DATABASE) {
+            return new InfoPreviewResult("create index " + tablePath.getTableName());
+        } else if (actionType == ActionType.DROP_DATABASE) {
+            return new InfoPreviewResult("delete index " + tablePath.getTableName());
+        } else {
+            throw new UnsupportedOperationException("Unsupported action type: " + actionType);
+        }
     }
 }

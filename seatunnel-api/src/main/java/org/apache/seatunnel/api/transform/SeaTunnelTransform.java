@@ -18,18 +18,16 @@
 package org.apache.seatunnel.api.transform;
 
 import org.apache.seatunnel.api.common.PluginIdentifierInterface;
-import org.apache.seatunnel.api.common.SeaTunnelPluginLifeCycle;
 import org.apache.seatunnel.api.source.SeaTunnelJobAware;
 import org.apache.seatunnel.api.table.catalog.CatalogTable;
+import org.apache.seatunnel.api.table.schema.event.SchemaChangeEvent;
 import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
 
 import java.io.Serializable;
+import java.util.List;
 
 public interface SeaTunnelTransform<T>
-        extends Serializable,
-                PluginIdentifierInterface,
-                SeaTunnelPluginLifeCycle,
-                SeaTunnelJobAware {
+        extends Serializable, PluginIdentifierInterface, SeaTunnelJobAware {
 
     /** call it when Transformer initialed */
     default void open() {}
@@ -41,27 +39,18 @@ public interface SeaTunnelTransform<T>
      * @param inputDataType The data type info of upstream input.
      */
     @Deprecated
-    void setTypeInfo(SeaTunnelDataType<T> inputDataType);
-
-    /**
-     * Get the data type of the records produced by this transform.
-     *
-     * @deprecated Please use {@link #getProducedCatalogTable}
-     * @return Produced data type.
-     */
-    @Deprecated
-    SeaTunnelDataType<T> getProducedType();
+    default void setTypeInfo(SeaTunnelDataType<T> inputDataType) {
+        throw new UnsupportedOperationException("setTypeInfo method is not supported");
+    }
 
     /** Get the catalog table output by this transform */
     CatalogTable getProducedCatalogTable();
 
-    /**
-     * Transform input data to {@link this#getProducedType()} types data.
-     *
-     * @param row the data need be transform.
-     * @return transformed data.
-     */
-    T map(T row);
+    List<CatalogTable> getProducedCatalogTables();
+
+    default SchemaChangeEvent mapSchemaChangeEvent(SchemaChangeEvent schemaChangeEvent) {
+        return schemaChangeEvent;
+    }
 
     /** call it when Transformer completed */
     default void close() {}

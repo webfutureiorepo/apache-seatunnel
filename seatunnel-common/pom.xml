@@ -44,6 +44,10 @@
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-collections4</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-csv</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>org.apache.seatunnel</groupId>
@@ -60,10 +64,16 @@
         </dependency>
 
         <dependency>
+            <groupId>org.apache.seatunnel</groupId>
+            <artifactId>seatunnel-arrow</artifactId>
+            <version>${project.version}</version>
+            <classifier>optional</classifier>
+        </dependency>
+
+        <dependency>
             <groupId>commons-codec</groupId>
             <artifactId>commons-codec</artifactId>
         </dependency>
-
     </dependencies>
 
 </project>

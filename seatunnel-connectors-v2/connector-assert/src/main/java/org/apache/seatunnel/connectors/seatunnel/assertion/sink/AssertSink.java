@@ -17,16 +17,16 @@
 
 package org.apache.seatunnel.connectors.seatunnel.assertion.sink;
 
+import org.apache.seatunnel.shade.com.google.common.base.Throwables;
 import org.apache.seatunnel.shade.com.typesafe.config.Config;
 import org.apache.seatunnel.shade.com.typesafe.config.ConfigException;
 import org.apache.seatunnel.shade.com.typesafe.config.ConfigFactory;
 
 import org.apache.seatunnel.api.configuration.ReadonlyConfig;
-import org.apache.seatunnel.api.sink.SeaTunnelSink;
 import org.apache.seatunnel.api.sink.SinkWriter;
+import org.apache.seatunnel.api.sink.SupportMultiTableSink;
 import org.apache.seatunnel.api.table.catalog.CatalogOptions;
 import org.apache.seatunnel.api.table.catalog.CatalogTable;
-import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
 import org.apache.seatunnel.connectors.seatunnel.assertion.rule.AssertCatalogTableRule;
@@ -34,127 +34,109 @@ import org.apache.seatunnel.connectors.seatunnel.assertion.rule.AssertFieldRule;
 import org.apache.seatunnel.connectors.seatunnel.assertion.rule.AssertRuleParser;
 import org.apache.seatunnel.connectors.seatunnel.assertion.rule.AssertTableRule;
 import org.apache.seatunnel.connectors.seatunnel.common.sink.AbstractSimpleSink;
-import org.apache.seatunnel.connectors.seatunnel.common.sink.AbstractSinkWriter;
-
-import org.apache.commons.collections4.CollectionUtils;
-
-import com.google.auto.service.AutoService;
-import com.google.common.base.Throwables;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
+import static org.apache.seatunnel.api.table.catalog.schema.TableSchemaOptions.TABLE_CONFIGS;
 import static org.apache.seatunnel.connectors.seatunnel.assertion.sink.AssertConfig.CATALOG_TABLE_RULES;
 import static org.apache.seatunnel.connectors.seatunnel.assertion.sink.AssertConfig.FIELD_RULES;
 import static org.apache.seatunnel.connectors.seatunnel.assertion.sink.AssertConfig.ROW_RULES;
 import static org.apache.seatunnel.connectors.seatunnel.assertion.sink.AssertConfig.RULES;
+import static org.apache.seatunnel.connectors.seatunnel.assertion.sink.AssertConfig.TABLE_PATH;
 
-@AutoService(SeaTunnelSink.class)
-public class AssertSink extends AbstractSimpleSink<SeaTunnelRow, Void> {
-    private SeaTunnelRowType seaTunnelRowType;
-    private CatalogTable catalogTable;
-    private List<AssertFieldRule> assertFieldRules;
-    private List<AssertFieldRule.AssertRule> assertRowRules;
-    private AssertTableRule assertTableRule;
-
-    private AssertCatalogTableRule assertCatalogTableRule;
-
-    public AssertSink() {}
+public class AssertSink extends AbstractSimpleSink<SeaTunnelRow, Void>
+        implements SupportMultiTableSink {
+    private final SeaTunnelRowType seaTunnelRowType;
+    private final Map<String, List<AssertFieldRule>> assertFieldRules;
+    private final Map<String, List<AssertFieldRule.AssertRule>> assertRowRules;
+    private final AssertTableRule assertTableRule;
+    private final Map<String, AssertCatalogTableRule> assertCatalogTableRule;
+    private final String catalogTableName;
+    private final CatalogTable catalogTable;
 
     public AssertSink(ReadonlyConfig pluginConfig, CatalogTable catalogTable) {
-        this.catalogTable = catalogTable;
         this.seaTunnelRowType = catalogTable.getSeaTunnelRowType();
         if (!pluginConfig.getOptional(RULES).isPresent()) {
-            Throwables.propagateIfPossible(new ConfigException.Missing(RULES.key()));
+            Throwables.throwIfUnchecked(new ConfigException.Missing(RULES.key()));
         }
+        assertFieldRules = new ConcurrentHashMap<>();
+        assertRowRules = new ConcurrentHashMap<>();
+        assertCatalogTableRule = new ConcurrentHashMap<>();
+        catalogTableName = catalogTable.getTablePath().getFullName();
         Config ruleConfig = ConfigFactory.parseMap(pluginConfig.get(RULES));
-        List<? extends Config> rowConfigList = null;
-        List<? extends Config> configList = null;
-        if (ruleConfig.hasPath(ROW_RULES)) {
-            rowConfigList = ruleConfig.getConfigList(ROW_RULES);
-            assertRowRules = new AssertRuleParser().parseRowRules(rowConfigList);
-        }
-        if (ruleConfig.hasPath(FIELD_RULES)) {
-            configList = ruleConfig.getConfigList(FIELD_RULES);
-            assertFieldRules = new AssertRuleParser().parseRules(configList);
+        if (ruleConfig.hasPath(TABLE_CONFIGS.key())) {
+            List<? extends Config> tableConfigs = ruleConfig.getConfigList(TABLE_CONFIGS.key());
+            for (Config tableConfig : tableConfigs) {
+                String tableName = tableConfig.getString(TABLE_PATH.key());
+                initTableRule(catalogTable, tableConfig, tableName);
+            }
+        } else {
+            String tableName = catalogTable.getTablePath().getFullName();
+            initTableRule(catalogTable, ruleConfig, tableName);
         }
 
-        if (ruleConfig.hasPath(CATALOG_TABLE_RULES)) {
-            assertCatalogTableRule =
+        if (ruleConfig.hasPath(CatalogOptions.TABLE_NAMES.key())) {
+            assertTableRule =
+                    new AssertTableRule(ruleConfig.getStringList(CatalogOptions.TABLE_NAMES.key()));
+        } else {
+            assertTableRule = new AssertTableRule(new ArrayList<>());
+        }
+
+        if (assertRowRules.isEmpty()
+                && assertFieldRules.isEmpty()
+                && assertCatalogTableRule.isEmpty()
+                && assertTableRule.getTableNames().isEmpty()) {
+            Throwables.throwIfUnchecked(
+                    new ConfigException.BadValue(
+                            RULES.key(), "Assert rule config is empty, please add rule config."));
+        }
+        this.catalogTable = catalogTable;
+    }
+
+    private void initTableRule(CatalogTable catalogTable, Config tableConfig, String tableName) {
+        List<? extends Config> rowConfigList;
+        List<? extends Config> configList;
+        if (tableConfig.hasPath(ROW_RULES)) {
+            rowConfigList = tableConfig.getConfigList(ROW_RULES);
+            assertRowRules.put(tableName, new AssertRuleParser().parseRowRules(rowConfigList));
+        }
+        if (tableConfig.hasPath(FIELD_RULES)) {
+            configList = tableConfig.getConfigList(FIELD_RULES);
+            assertFieldRules.put(tableName, new AssertRuleParser().parseRules(configList));
+        }
+
+        if (tableConfig.hasPath(CATALOG_TABLE_RULES)) {
+            AssertCatalogTableRule catalogTableRule =
                     new AssertRuleParser()
-                            .parseCatalogTableRule(ruleConfig.getConfig(CATALOG_TABLE_RULES));
-            assertCatalogTableRule.checkRule(catalogTable);
-        }
-
-        if (ruleConfig.hasPath(CatalogOptions.TABLE_NAMES.key())) {
-            assertTableRule =
-                    new AssertTableRule(ruleConfig.getStringList(CatalogOptions.TABLE_NAMES.key()));
-        } else {
-            assertTableRule = new AssertTableRule(new ArrayList<>());
-        }
-
-        if (CollectionUtils.isEmpty(configList)
-                && CollectionUtils.isEmpty(rowConfigList)
-                && assertCatalogTableRule == null
-                && assertTableRule.getTableNames().isEmpty()) {
-            Throwables.propagateIfPossible(
-                    new ConfigException.BadValue(
-                            RULES.key(), "Assert rule config is empty, please add rule config."));
+                            .parseCatalogTableRule(tableConfig.getConfig(CATALOG_TABLE_RULES));
+            if (tableName.equals(catalogTableName)) {
+                catalogTableRule.checkRule(catalogTable);
+            }
+            assertCatalogTableRule.put(tableName, catalogTableRule);
         }
     }
 
     @Override
-    public void setTypeInfo(SeaTunnelRowType seaTunnelRowType) {
-        this.seaTunnelRowType = seaTunnelRowType;
-    }
-
-    @Override
-    public SeaTunnelDataType<SeaTunnelRow> getConsumedType() {
-        return seaTunnelRowType;
-    }
-
-    @Override
-    public AbstractSinkWriter<SeaTunnelRow, Void> createWriter(SinkWriter.Context context) {
+    public AssertSinkWriter createWriter(SinkWriter.Context context) {
         return new AssertSinkWriter(
-                seaTunnelRowType, assertFieldRules, assertRowRules, assertTableRule);
-    }
-
-    @Override
-    public void prepare(Config pluginConfig) {
-        if (!pluginConfig.hasPath(RULES.key())) {
-            Throwables.propagateIfPossible(new ConfigException.Missing(RULES.key()));
-        }
-        Config ruleConfig = pluginConfig.getConfig(RULES.key());
-        List<? extends Config> rowConfigList = null;
-        List<? extends Config> configList = null;
-        if (ruleConfig.hasPath(ROW_RULES)) {
-            rowConfigList = ruleConfig.getConfigList(ROW_RULES);
-            assertRowRules = new AssertRuleParser().parseRowRules(rowConfigList);
-        }
-        if (ruleConfig.hasPath(FIELD_RULES)) {
-            configList = ruleConfig.getConfigList(FIELD_RULES);
-            assertFieldRules = new AssertRuleParser().parseRules(configList);
-        }
-
-        if (ruleConfig.hasPath(CatalogOptions.TABLE_NAMES.key())) {
-            assertTableRule =
-                    new AssertTableRule(ruleConfig.getStringList(CatalogOptions.TABLE_NAMES.key()));
-        } else {
-            assertTableRule = new AssertTableRule(new ArrayList<>());
-        }
-
-        if (CollectionUtils.isEmpty(configList)
-                && CollectionUtils.isEmpty(rowConfigList)
-                && assertCatalogTableRule == null
-                && assertTableRule.getTableNames().isEmpty()) {
-            Throwables.propagateIfPossible(
-                    new ConfigException.BadValue(
-                            RULES.key(), "Assert rule config is empty, please add rule config."));
-        }
+                seaTunnelRowType,
+                assertFieldRules,
+                assertRowRules,
+                assertTableRule,
+                catalogTableName);
     }
 
     @Override
     public String getPluginName() {
         return "Assert";
+    }
+
+    @Override
+    public Optional<CatalogTable> getWriteCatalogTable() {
+        return Optional.of(catalogTable);
     }
 }

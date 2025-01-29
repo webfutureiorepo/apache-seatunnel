@@ -22,7 +22,9 @@ import org.apache.seatunnel.shade.com.typesafe.config.ConfigFactory;
 import org.apache.seatunnel.shade.com.typesafe.config.ConfigResolveOptions;
 import org.apache.seatunnel.shade.com.typesafe.config.ConfigValue;
 
+import org.apache.seatunnel.api.common.PluginIdentifier;
 import org.apache.seatunnel.api.common.PluginIdentifierInterface;
+import org.apache.seatunnel.api.configuration.Option;
 import org.apache.seatunnel.api.configuration.util.OptionRule;
 import org.apache.seatunnel.api.table.factory.Factory;
 import org.apache.seatunnel.api.table.factory.FactoryUtil;
@@ -37,6 +39,7 @@ import org.apache.seatunnel.common.utils.ReflectionUtils;
 
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.tuple.ImmutableTriple;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -47,20 +50,24 @@ import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.ServiceLoader;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 
 @Slf4j
+@SuppressWarnings("unchecked")
 public abstract class AbstractPluginDiscovery<T> implements PluginDiscovery<T> {
 
     private static final String PLUGIN_MAPPING_FILE = "plugin-mapping.properties";
@@ -231,24 +238,54 @@ public abstract class AbstractPluginDiscovery<T> implements PluginDiscovery<T> {
         throw new RuntimeException("Plugin " + pluginIdentifier + " not found.");
     }
 
+    @Override
+    public ImmutableTriple<PluginIdentifier, List<Option<?>>, List<Option<?>>> getOptionRules(
+            String pluginIdentifier) {
+        Optional<Map.Entry<PluginIdentifier, OptionRule>> pluginEntry =
+                getPlugins().entrySet().stream()
+                        .filter(
+                                entry ->
+                                        entry.getKey()
+                                                .getPluginName()
+                                                .equalsIgnoreCase(pluginIdentifier))
+                        .findFirst();
+        if (pluginEntry.isPresent()) {
+            Map.Entry<PluginIdentifier, OptionRule> entry = pluginEntry.get();
+            List<Option<?>> requiredOptions =
+                    entry.getValue().getRequiredOptions().stream()
+                            .flatMap(requiredOption -> requiredOption.getOptions().stream())
+                            .collect(Collectors.toList());
+            List<Option<?>> optionalOptions = entry.getValue().getOptionalOptions();
+            return ImmutableTriple.of(entry.getKey(), requiredOptions, optionalOptions);
+        }
+        return ImmutableTriple.of(null, new ArrayList<>(), new ArrayList<>());
+    }
+
+    /**
+     * Get all support plugin already in SEATUNNEL_HOME, support connector-v2 and transform-v2
+     *
+     * @param pluginType
+     * @param factoryIdentifier
+     * @param optionRule
+     * @return
+     */
+    protected void getPluginsByFactoryIdentifier(
+            LinkedHashMap<PluginIdentifier, OptionRule> plugins,
+            PluginType pluginType,
+            String factoryIdentifier,
+            OptionRule optionRule) {
+        PluginIdentifier pluginIdentifier =
+                PluginIdentifier.of("seatunnel", pluginType.getType(), factoryIdentifier);
+        plugins.computeIfAbsent(pluginIdentifier, k -> optionRule);
+    }
+
     /**
      * Get all support plugin already in SEATUNNEL_HOME, only support connector-v2
      *
      * @return the all plugin identifier of the engine
      */
-    public Map<PluginType, LinkedHashMap<PluginIdentifier, OptionRule>> getAllPlugin()
-            throws IOException {
-        List<Factory> factories;
-        if (this.pluginDir.toFile().exists()) {
-            log.info("load plugin from plugin dir: {}", this.pluginDir);
-            List<URL> files = FileUtils.searchJarFiles(this.pluginDir);
-            factories =
-                    FactoryUtil.discoverFactories(new URLClassLoader(files.toArray(new URL[0])));
-        } else {
-            log.warn("plugin dir: {} not exists, load plugin from classpath", this.pluginDir);
-            factories =
-                    FactoryUtil.discoverFactories(Thread.currentThread().getContextClassLoader());
-        }
+    public Map<PluginType, LinkedHashMap<PluginIdentifier, OptionRule>> getAllPlugin() {
+        List<Factory> factories = getPluginFactories();
 
         Map<PluginType, LinkedHashMap<PluginIdentifier, OptionRule>> plugins = new HashMap<>();
 
@@ -295,6 +332,29 @@ public abstract class AbstractPluginDiscovery<T> implements PluginDiscovery<T> {
                     }
                 });
         return plugins;
+    }
+
+    protected List<Factory> getPluginFactories() {
+        List<Factory> factories;
+        if (this.pluginDir.toFile().exists()) {
+            log.debug("load plugin from plugin dir: {}", this.pluginDir);
+            List<URL> files;
+            try {
+                files = FileUtils.searchJarFiles(this.pluginDir);
+            } catch (IOException e) {
+                throw new RuntimeException(
+                        String.format(
+                                "Can not find any plugin(source/sink/transform) in the dir: %s",
+                                this.pluginDir));
+            }
+            factories =
+                    FactoryUtil.discoverFactories(new URLClassLoader(files.toArray(new URL[0])));
+        } else {
+            log.warn("plugin dir: {} not exists, load plugin from classpath", this.pluginDir);
+            factories =
+                    FactoryUtil.discoverFactories(Thread.currentThread().getContextClassLoader());
+        }
+        return factories;
     }
 
     protected T loadPluginInstance(PluginIdentifier pluginIdentifier, ClassLoader classLoader) {
@@ -374,17 +434,16 @@ public abstract class AbstractPluginDiscovery<T> implements PluginDiscovery<T> {
         if (ArrayUtils.isEmpty(targetPluginFiles)) {
             return Optional.empty();
         }
-        if (targetPluginFiles.length > 1) {
-            throw new IllegalArgumentException(
-                    "Found multiple plugin jar: "
-                            + Arrays.stream(targetPluginFiles)
-                                    .map(File::getPath)
-                                    .collect(Collectors.joining(","))
-                            + " for pluginIdentifier: "
-                            + pluginIdentifier);
-        }
         try {
-            URL pluginJarPath = targetPluginFiles[0].toURI().toURL();
+            URL pluginJarPath;
+            if (targetPluginFiles.length == 1) {
+                pluginJarPath = targetPluginFiles[0].toURI().toURL();
+            } else {
+                pluginJarPath =
+                        findMostSimlarPluginJarFile(targetPluginFiles, pluginJarPrefix)
+                                .toURI()
+                                .toURL();
+            }
             log.info("Discovery plugin jar for: {} at: {}", pluginIdentifier, pluginJarPath);
             return Optional.of(pluginJarPath);
         } catch (MalformedURLException e) {
@@ -393,6 +452,107 @@ public abstract class AbstractPluginDiscovery<T> implements PluginDiscovery<T> {
                     pluginIdentifier,
                     e);
             return Optional.empty();
+        }
+    }
+
+    private static File findMostSimlarPluginJarFile(
+            File[] targetPluginFiles, String pluginJarPrefix) {
+        String splitRegex = "\\-|\\_|\\.";
+        double maxSimlarity = -Integer.MAX_VALUE;
+        int mostSimlarPluginJarFileIndex = -1;
+        for (int i = 0; i < targetPluginFiles.length; i++) {
+            File file = targetPluginFiles[i];
+            String fileName = file.getName();
+            double similarity =
+                    CosineSimilarityUtil.cosineSimilarity(pluginJarPrefix, fileName, splitRegex);
+            if (similarity > maxSimlarity) {
+                maxSimlarity = similarity;
+                mostSimlarPluginJarFileIndex = i;
+            }
+        }
+        return targetPluginFiles[mostSimlarPluginJarFileIndex];
+    }
+
+    static class CosineSimilarityUtil {
+        public static double cosineSimilarity(String textA, String textB, String splitRegrex) {
+            Set<String> words1 =
+                    new HashSet<>(Arrays.asList(textA.toLowerCase().split(splitRegrex)));
+            Set<String> words2 =
+                    new HashSet<>(Arrays.asList(textB.toLowerCase().split(splitRegrex)));
+            int[] termFrequency1 = calculateTermFrequencyVector(textA, words1, splitRegrex);
+            int[] termFrequency2 = calculateTermFrequencyVector(textB, words2, splitRegrex);
+            return calculateCosineSimilarity(termFrequency1, termFrequency2);
+        }
+
+        private static int[] calculateTermFrequencyVector(
+                String text, Set<String> words, String splitRegrex) {
+            int[] termFrequencyVector = new int[words.size()];
+            String[] textArray = text.toLowerCase().split(splitRegrex);
+            List<String> orderedWords = new ArrayList<String>();
+            words.clear();
+            for (String word : textArray) {
+                if (!words.contains(word)) {
+                    orderedWords.add(word);
+                    words.add(word);
+                }
+            }
+            for (String word : textArray) {
+                if (words.contains(word)) {
+                    int index = 0;
+                    for (String w : orderedWords) {
+                        if (w.equals(word)) {
+                            termFrequencyVector[index]++;
+                            break;
+                        }
+                        index++;
+                    }
+                }
+            }
+            return termFrequencyVector;
+        }
+
+        private static double calculateCosineSimilarity(int[] vectorA, int[] vectorB) {
+            double dotProduct = 0.0;
+            double magnitudeA = 0.0;
+            double magnitudeB = 0.0;
+            int vectorALength = vectorA.length;
+            int vectorBLength = vectorB.length;
+            if (vectorALength < vectorBLength) {
+                int[] vectorTemp = new int[vectorBLength];
+                for (int i = 0; i < vectorB.length; i++) {
+                    if (i <= vectorALength - 1) {
+                        vectorTemp[i] = vectorA[i];
+                    } else {
+                        vectorTemp[i] = 0;
+                    }
+                }
+                vectorA = vectorTemp;
+            }
+            if (vectorALength > vectorBLength) {
+                int[] vectorTemp = new int[vectorALength];
+                for (int i = 0; i < vectorA.length; i++) {
+                    if (i <= vectorBLength - 1) {
+                        vectorTemp[i] = vectorB[i];
+                    } else {
+                        vectorTemp[i] = 0;
+                    }
+                }
+                vectorB = vectorTemp;
+            }
+            for (int i = 0; i < vectorA.length; i++) {
+                dotProduct += vectorA[i] * vectorB[i];
+                magnitudeA += Math.pow(vectorA[i], 2);
+                magnitudeB += Math.pow(vectorB[i], 2);
+            }
+
+            magnitudeA = Math.sqrt(magnitudeA);
+            magnitudeB = Math.sqrt(magnitudeB);
+
+            if (magnitudeA == 0 || magnitudeB == 0) {
+                return 0.0; // Avoid dividing by 0
+            } else {
+                return dotProduct / (magnitudeA * magnitudeB);
+            }
         }
     }
 }

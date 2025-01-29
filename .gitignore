@@ -49,5 +49,14 @@ spark-warehouse
 *.flattened-pom.xml
 
 seatunnel-examples
+
+# vscode
+.vscode
+
 /lib/*
 version.properties
+node/
+
+dist/
+
+seatunnel-engine/seatunnel-engine-server/**/ui/*

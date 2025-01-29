@@ -17,6 +17,12 @@
 
 package org.apache.seatunnel.e2e.connector.cdc.sqlserver;
 
+import org.apache.seatunnel.shade.com.google.common.collect.Lists;
+
+import org.apache.seatunnel.common.utils.SeaTunnelException;
+import org.apache.seatunnel.connectors.cdc.base.config.JdbcSourceConfigFactory;
+import org.apache.seatunnel.connectors.seatunnel.cdc.sqlserver.config.SqlServerSourceConfigFactory;
+import org.apache.seatunnel.connectors.seatunnel.cdc.sqlserver.source.SqlServerDialect;
 import org.apache.seatunnel.e2e.common.TestResource;
 import org.apache.seatunnel.e2e.common.TestSuiteBase;
 import org.apache.seatunnel.e2e.common.container.ContainerExtendedFactory;
@@ -24,12 +30,14 @@ import org.apache.seatunnel.e2e.common.container.EngineType;
 import org.apache.seatunnel.e2e.common.container.TestContainer;
 import org.apache.seatunnel.e2e.common.junit.DisabledOnContainer;
 import org.apache.seatunnel.e2e.common.junit.TestContainerExtension;
+import org.apache.seatunnel.e2e.common.util.JobIdGenerator;
 
 import org.awaitility.Awaitility;
 import org.awaitility.core.ConditionTimeoutException;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestTemplate;
 import org.testcontainers.containers.Container;
 import org.testcontainers.containers.MSSQLServerContainer;
@@ -37,7 +45,8 @@ import org.testcontainers.containers.output.Slf4jLogConsumer;
 import org.testcontainers.lifecycle.Startables;
 import org.testcontainers.utility.DockerLoggerFactory;
 
-import com.google.common.collect.Lists;
+import io.debezium.jdbc.JdbcConnection;
+import io.debezium.relational.TableId;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.IOException;
@@ -51,6 +60,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -66,7 +76,7 @@ import static org.awaitility.Awaitility.await;
 @DisabledOnContainer(
         value = {},
         type = {EngineType.SPARK},
-        disabledReason = "Currently SPARK and FLINK do not support cdc")
+        disabledReason = "Currently SPARK do not support cdc")
 public class SqlServerCDCIT extends TestSuiteBase implements TestResource {
 
     private static final String HOST = "sqlserver-host";
@@ -80,9 +90,72 @@ public class SqlServerCDCIT extends TestSuiteBase implements TestResource {
     private static final String DISABLE_DB_CDC =
             "IF EXISTS(select 1 from sys.databases where name='#' AND is_cdc_enabled=1)\n"
                     + "EXEC sys.sp_cdc_disable_db";
-
-    private static final String SOURCE_SQL = "select * from column_type_test.dbo.full_types";
-    private static final String SINK_SQL = "select * from column_type_test.dbo.full_types_sink";
+    private static final String SOURCE_TABLE = "column_type_test.dbo.full_types";
+    private static final String SOURCE_TABLE_NO_PRIMARY_KEY =
+            "column_type_test.dbo.full_types_no_primary_key";
+    private static final String SOURCE_TABLE_CUSTOM_PRIMARY_KEY =
+            "column_type_test.dbo.full_types_custom_primary_key";
+    private static final String SINK_TABLE = "column_type_test.dbo.full_types_sink";
+    private static final String SELECT_SOURCE_SQL =
+            "select\n"
+                    + "  id,\n"
+                    + "  val_char,\n"
+                    + "  val_varchar,\n"
+                    + "  val_text,\n"
+                    + "  val_nchar,\n"
+                    + "  val_nvarchar,\n"
+                    + "  val_ntext,\n"
+                    + "  val_decimal,\n"
+                    + "  val_numeric,\n"
+                    + "  val_float,\n"
+                    + "  val_real,\n"
+                    + "  val_smallmoney,\n"
+                    + "  val_money,\n"
+                    + "  val_bit,\n"
+                    + "  val_tinyint,\n"
+                    + "  val_smallint,\n"
+                    + "  val_int,\n"
+                    + "  val_bigint,\n"
+                    + "  val_date,\n"
+                    + "  val_time,\n"
+                    + "  val_datetime2,\n"
+                    + "  val_datetime,\n"
+                    + "  val_smalldatetime,\n"
+                    + "  val_xml,\n"
+                    + "  val_datetimeoffset,\n"
+                    + "  CONVERT(varchar(100), val_varbinary) as val_varbinary,\n"
+                    + "  val_udtdecimal\n"
+                    + "from %s order by id asc";
+    private static final String SELECT_SINK_SQL =
+            "select\n"
+                    + "  id,\n"
+                    + "  val_char,\n"
+                    + "  val_varchar,\n"
+                    + "  val_text,\n"
+                    + "  val_nchar,\n"
+                    + "  val_nvarchar,\n"
+                    + "  val_ntext,\n"
+                    + "  val_decimal,\n"
+                    + "  val_numeric,\n"
+                    + "  val_float,\n"
+                    + "  val_real,\n"
+                    + "  val_smallmoney,\n"
+                    + "  val_money,\n"
+                    + "  val_bit,\n"
+                    + "  val_tinyint,\n"
+                    + "  val_smallint,\n"
+                    + "  val_int,\n"
+                    + "  val_bigint,\n"
+                    + "  val_date,\n"
+                    + "  val_time,\n"
+                    + "  val_datetime2,\n"
+                    + "  val_datetime,\n"
+                    + "  val_smalldatetime,\n"
+                    + "  val_xml,\n"
+                    + "  val_datetimeoffset,\n"
+                    + "  CONVERT(varchar(100), val_varbinary) as val_varbinary,\n"
+                    + "  val_udtdecimal\n"
+                    + "from %s order by id asc";
 
     public static final MSSQLServerContainer MSSQL_SERVER_CONTAINER =
             new MSSQLServerContainer<>("mcr.microsoft.com/mssql/server:2019-latest")
@@ -151,19 +224,162 @@ public class SqlServerCDCIT extends TestSuiteBase implements TestResource {
                 .untilAsserted(
                         () -> {
                             Assertions.assertIterableEquals(
-                                    querySql(SOURCE_SQL), querySql(SINK_SQL));
+                                    querySql(SELECT_SOURCE_SQL, SOURCE_TABLE),
+                                    querySql(SELECT_SINK_SQL, SINK_TABLE));
                         });
 
         // insert update delete
-        updateSourceTable();
+        updateSourceTable(SOURCE_TABLE);
 
         // stream stage
         await().atMost(60000, TimeUnit.MILLISECONDS)
                 .untilAsserted(
                         () -> {
                             Assertions.assertIterableEquals(
-                                    querySql(SOURCE_SQL), querySql(SINK_SQL));
+                                    querySql(SELECT_SOURCE_SQL, SOURCE_TABLE),
+                                    querySql(SELECT_SINK_SQL, SINK_TABLE));
                         });
+    }
+
+    @TestTemplate
+    public void testCDCWithNoPrimaryKey(TestContainer container) {
+        initializeSqlServerTable("column_type_test");
+
+        CompletableFuture<Void> executeJobFuture =
+                CompletableFuture.supplyAsync(
+                        () -> {
+                            try {
+                                container.executeJob(
+                                        "/sqlservercdc_to_sqlserver_with_no_primary_key.conf");
+                            } catch (Exception e) {
+                                throw new RuntimeException(e);
+                            }
+                            return null;
+                        });
+
+        // snapshot stage
+        await().atMost(60000, TimeUnit.MILLISECONDS)
+                .untilAsserted(
+                        () -> {
+                            Assertions.assertIterableEquals(
+                                    querySql(SELECT_SOURCE_SQL, SOURCE_TABLE_NO_PRIMARY_KEY),
+                                    querySql(SELECT_SINK_SQL, SINK_TABLE));
+                        });
+
+        // insert update delete
+        updateSourceTable(SOURCE_TABLE_NO_PRIMARY_KEY);
+
+        // stream stage
+        await().atMost(60000, TimeUnit.MILLISECONDS)
+                .untilAsserted(
+                        () -> {
+                            Assertions.assertIterableEquals(
+                                    querySql(SELECT_SOURCE_SQL, SOURCE_TABLE_NO_PRIMARY_KEY),
+                                    querySql(SELECT_SINK_SQL, SINK_TABLE));
+                        });
+    }
+
+    @TestTemplate
+    public void testCDCWithCustomPrimaryKey(TestContainer container) {
+        initializeSqlServerTable("column_type_test");
+
+        CompletableFuture<Void> executeJobFuture =
+                CompletableFuture.supplyAsync(
+                        () -> {
+                            try {
+                                container.executeJob(
+                                        "/sqlservercdc_to_sqlserver_with_custom_primary_key.conf");
+                            } catch (Exception e) {
+                                throw new RuntimeException(e);
+                            }
+                            return null;
+                        });
+
+        // snapshot stage
+        await().atMost(60000, TimeUnit.MILLISECONDS)
+                .untilAsserted(
+                        () -> {
+                            Assertions.assertIterableEquals(
+                                    querySql(SELECT_SOURCE_SQL, SOURCE_TABLE_CUSTOM_PRIMARY_KEY),
+                                    querySql(SELECT_SINK_SQL, SINK_TABLE));
+                        });
+
+        // insert update delete
+        updateSourceTable(SOURCE_TABLE_CUSTOM_PRIMARY_KEY);
+
+        // stream stage
+        await().atMost(60000, TimeUnit.MILLISECONDS)
+                .untilAsserted(
+                        () -> {
+                            Assertions.assertIterableEquals(
+                                    querySql(SELECT_SOURCE_SQL, SOURCE_TABLE_CUSTOM_PRIMARY_KEY),
+                                    querySql(SELECT_SINK_SQL, SINK_TABLE));
+                        });
+    }
+
+    @TestTemplate
+    @DisabledOnContainer(
+            value = {},
+            type = {EngineType.SPARK, EngineType.FLINK},
+            disabledReason =
+                    "This case requires obtaining the task health status and manually canceling the canceled task, which is currently only supported by the zeta engine.")
+    public void testSqlServerCDCMetadataTrans(TestContainer container) throws InterruptedException {
+        initializeSqlServerTable("column_type_test");
+
+        Long jobId = JobIdGenerator.newJobId();
+        CompletableFuture.runAsync(
+                () -> {
+                    try {
+                        container.executeJob(
+                                "/sqlservercdc_to_metadata_trans.conf", String.valueOf(jobId));
+                    } catch (Exception e) {
+                        log.error("Commit task exception :" + e.getMessage());
+                        throw new RuntimeException(e);
+                    }
+                });
+        TimeUnit.SECONDS.sleep(10);
+        // insert update delete
+        updateSourceTable(SOURCE_TABLE_CUSTOM_PRIMARY_KEY);
+        TimeUnit.SECONDS.sleep(20);
+        await().atMost(2, TimeUnit.MINUTES)
+                .untilAsserted(
+                        () -> {
+                            String jobStatus = container.getJobStatus(String.valueOf(jobId));
+                            Assertions.assertEquals("RUNNING", jobStatus);
+                        });
+        try {
+            Container.ExecResult cancelJobResult = container.cancelJob(String.valueOf(jobId));
+            Assertions.assertEquals(0, cancelJobResult.getExitCode(), cancelJobResult.getStderr());
+        } catch (IOException | InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    public void testDialectCheckDisabledCDCTable() throws SQLException {
+        initializeSqlServerTable("column_type_test");
+        JdbcSourceConfigFactory factory =
+                new SqlServerSourceConfigFactory()
+                        .hostname(MSSQL_SERVER_CONTAINER.getHost())
+                        .port(PORT)
+                        .username("sa")
+                        .password("Password!")
+                        .databaseList("column_type_test");
+        SqlServerDialect dialect =
+                new SqlServerDialect(
+                        (SqlServerSourceConfigFactory) factory, Collections.emptyList());
+        try (JdbcConnection connection = dialect.openJdbcConnection(factory.create(0))) {
+            SeaTunnelException exception =
+                    Assertions.assertThrows(
+                            SeaTunnelException.class,
+                            () ->
+                                    dialect.checkAllTablesEnabledCapture(
+                                            connection,
+                                            Collections.singletonList(TableId.parse(SINK_TABLE))));
+            Assertions.assertEquals(
+                    "Table column_type_test.dbo.full_types_sink is not enabled for capture",
+                    exception.getMessage());
+        }
     }
 
     /**
@@ -199,26 +415,29 @@ public class SqlServerCDCIT extends TestSuiteBase implements TestResource {
         }
     }
 
-    private void updateSourceTable() {
+    private void updateSourceTable(String table) {
         executeSql(
-                "INSERT INTO column_type_test.dbo.full_types VALUES (3,\n"
+                "INSERT INTO "
+                        + table
+                        + " VALUES (3,\n"
                         + "                               'cč3', 'vcč', 'tč', N'cč', N'vcč', N'tč',\n"
                         + "                               1.123, 2, 3.323, 4.323, 5.323, 6.323,\n"
                         + "                               1, 22, 333, 4444, 55555,\n"
                         + "                               '2018-07-13', '10:23:45', '2018-07-13 11:23:45.34', '2018-07-13 13:23:45.78', '2018-07-13 14:23:45',\n"
-                        + "                               '<a>b</a>');");
+                        + "                               '<a>b</a>',SYSDATETIMEOFFSET(),CAST('test_varbinary' AS varbinary(100)), 5.32);");
         executeSql(
-                "INSERT INTO column_type_test.dbo.full_types VALUES (4,\n"
+                "INSERT INTO "
+                        + table
+                        + " VALUES (4,\n"
                         + "                               'cč4', 'vcč', 'tč', N'cč', N'vcč', N'tč',\n"
                         + "                               1.123, 2, 3.323, 4.323, 5.323, 6.323,\n"
                         + "                               1, 22, 333, 4444, 55555,\n"
                         + "                               '2018-07-13', '10:23:45', '2018-07-13 11:23:45.34', '2018-07-13 13:23:45.78', '2018-07-13 14:23:45',\n"
-                        + "                               '<a>b</a>');");
+                        + "                               '<a>b</a>',SYSDATETIMEOFFSET(),CAST('test_varbinary' AS varbinary(100)), 5.32);");
 
-        executeSql("DELETE FROM column_type_test.dbo.full_types where id = 2");
+        executeSql("DELETE FROM " + table + " where id = 2");
 
-        executeSql(
-                "UPDATE column_type_test.dbo.full_types SET val_varchar = 'newvcč' where id = 1");
+        executeSql("UPDATE " + table + " SET val_varchar = 'newvcč' where id = 1");
     }
 
     private Connection getJdbcConnection() throws SQLException {
@@ -228,9 +447,14 @@ public class SqlServerCDCIT extends TestSuiteBase implements TestResource {
                 MSSQL_SERVER_CONTAINER.getPassword());
     }
 
+    private List<List<Object>> querySql(String sql, String table) {
+        return querySql(String.format(sql, table));
+    }
+
     private List<List<Object>> querySql(String sql) {
-        try (Connection connection = getJdbcConnection()) {
-            ResultSet resultSet = connection.createStatement().executeQuery(sql);
+        try (Connection connection = getJdbcConnection();
+                Statement statement = connection.createStatement();
+                ResultSet resultSet = statement.executeQuery(sql)) {
             List<List<Object>> result = new ArrayList<>();
             int columnCount = resultSet.getMetaData().getColumnCount();
             while (resultSet.next()) {

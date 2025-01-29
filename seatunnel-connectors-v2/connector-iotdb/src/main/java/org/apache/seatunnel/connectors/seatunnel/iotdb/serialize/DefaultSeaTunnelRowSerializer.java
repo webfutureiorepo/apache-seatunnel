@@ -17,15 +17,16 @@
 
 package org.apache.seatunnel.connectors.seatunnel.iotdb.serialize;
 
+import org.apache.seatunnel.shade.com.google.common.base.Strings;
+
 import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
-import org.apache.seatunnel.common.exception.CommonErrorCode;
+import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.connectors.seatunnel.iotdb.exception.IotdbConnectorException;
 
 import org.apache.iotdb.tsfile.file.metadata.enums.TSDataType;
 
-import com.google.common.base.Strings;
 import lombok.NonNull;
 
 import java.time.LocalDateTime;
@@ -93,7 +94,7 @@ public class DefaultSeaTunnelRowSerializer implements SeaTunnelRowSerializer {
                     return (Long) timestamp;
                 default:
                     throw new IotdbConnectorException(
-                            CommonErrorCode.UNSUPPORTED_DATA_TYPE,
+                            CommonErrorCodeDeprecated.UNSUPPORTED_DATA_TYPE,
                             "Unsupported data type: " + timestampFieldType);
             }
         };
@@ -182,7 +183,7 @@ public class DefaultSeaTunnelRowSerializer implements SeaTunnelRowSerializer {
                 return TSDataType.DOUBLE;
             default:
                 throw new IotdbConnectorException(
-                        CommonErrorCode.UNSUPPORTED_DATA_TYPE,
+                        CommonErrorCodeDeprecated.UNSUPPORTED_DATA_TYPE,
                         "Unsupported data type: " + dataType);
         }
     }
@@ -207,7 +208,7 @@ public class DefaultSeaTunnelRowSerializer implements SeaTunnelRowSerializer {
                 return value.toString();
             default:
                 throw new IotdbConnectorException(
-                        CommonErrorCode.UNSUPPORTED_DATA_TYPE,
+                        CommonErrorCodeDeprecated.UNSUPPORTED_DATA_TYPE,
                         "Unsupported data type: " + tsDataType);
         }
     }

@@ -20,6 +20,7 @@ package org.apache.seatunnel.translation.spark.source.partition.batch;
 import org.apache.seatunnel.api.source.SeaTunnelSource;
 import org.apache.seatunnel.api.source.SupportCoordinate;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
+import org.apache.seatunnel.translation.spark.execution.MultiTableManager;
 import org.apache.seatunnel.translation.spark.source.reader.SeaTunnelInputPartitionReader;
 import org.apache.seatunnel.translation.spark.source.reader.batch.CoordinatedBatchPartitionReader;
 import org.apache.seatunnel.translation.spark.source.reader.batch.ParallelBatchPartitionReader;
@@ -28,25 +29,43 @@ import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.sources.v2.reader.InputPartition;
 import org.apache.spark.sql.sources.v2.reader.InputPartitionReader;
 
+import java.util.Map;
+
 public class BatchPartition implements InputPartition<InternalRow> {
     protected final SeaTunnelSource<SeaTunnelRow, ?, ?> source;
     protected final Integer parallelism;
+    protected final String jobId;
     protected final Integer subtaskId;
+    private Map<String, String> envOptions;
+
+    private final MultiTableManager multiTableManager;
 
     public BatchPartition(
-            SeaTunnelSource<SeaTunnelRow, ?, ?> source, Integer parallelism, Integer subtaskId) {
+            SeaTunnelSource<SeaTunnelRow, ?, ?> source,
+            Integer parallelism,
+            String jobId,
+            Integer subtaskId,
+            Map<String, String> envOptions,
+            MultiTableManager multiTableManager) {
         this.source = source;
         this.parallelism = parallelism;
+        this.jobId = jobId;
         this.subtaskId = subtaskId;
+        this.envOptions = envOptions;
+        this.multiTableManager = multiTableManager;
     }
 
     @Override
     public InputPartitionReader<InternalRow> createPartitionReader() {
         ParallelBatchPartitionReader partitionReader;
         if (source instanceof SupportCoordinate) {
-            partitionReader = new CoordinatedBatchPartitionReader(source, parallelism, subtaskId);
+            partitionReader =
+                    new CoordinatedBatchPartitionReader(
+                            source, parallelism, jobId, subtaskId, envOptions, multiTableManager);
         } else {
-            partitionReader = new ParallelBatchPartitionReader(source, parallelism, subtaskId);
+            partitionReader =
+                    new ParallelBatchPartitionReader(
+                            source, parallelism, jobId, subtaskId, envOptions, multiTableManager);
         }
         return new SeaTunnelInputPartitionReader(partitionReader);
     }

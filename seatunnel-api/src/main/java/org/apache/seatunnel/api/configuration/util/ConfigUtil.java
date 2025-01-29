@@ -83,6 +83,12 @@ public class ConfigUtil {
     }
 
     static <T> List<T> convertToList(Object rawValue, Class<T> clazz) {
+        if (rawValue instanceof List) {
+            return ((List<?>) rawValue)
+                    .stream()
+                            .map(value -> convertValue(convertToJsonString(value), clazz))
+                            .collect(Collectors.toList());
+        }
         return Arrays.stream(rawValue.toString().split(","))
                 .map(String::trim)
                 .map(value -> convertValue(value, clazz))
@@ -105,6 +111,8 @@ public class ConfigUtil {
             return (T) convertToFloat(rawValue);
         } else if (Double.class.equals(clazz)) {
             return (T) convertToDouble(rawValue);
+        } else if (Object.class.equals(clazz)) {
+            return (T) rawValue;
         }
         throw new IllegalArgumentException("Unsupported type: " + clazz);
     }

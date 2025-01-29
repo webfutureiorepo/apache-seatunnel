@@ -26,6 +26,9 @@ connector-cassandra
 connector-cdc-mysql
 connector-cdc-mongodb
 connector-cdc-sqlserver
+connector-cdc-postgres
+connector-cdc-oracle
+connector-cdc-tidb
 connector-clickhouse
 connector-datahub
 connector-dingtalk
@@ -39,6 +42,7 @@ connector-file-oss
 connector-file-jindo-oss
 connector-file-s3
 connector-file-sftp
+connector-file-obs
 connector-google-sheets
 connector-google-firestore
 connector-hive
@@ -67,6 +71,7 @@ connector-openmldb
 connector-pulsar
 connector-rabbitmq
 connector-redis
+connector-druid
 connector-s3-redshift
 connector-sentry
 connector-slack
@@ -75,4 +80,16 @@ connector-starrocks
 connector-tablestore
 connector-selectdb-cloud
 connector-hbase
---end--
+connector-amazonsqs
+connector-easysearch
+connector-paimon
+connector-rocketmq
+connector-tdengine
+connector-web3j
+connector-milvus
+connector-activemq
+connector-prometheus
+connector-sls
+connector-qdrant
+connector-typesense
+connector-cdc-opengauss

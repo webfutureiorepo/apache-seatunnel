@@ -21,7 +21,9 @@ import org.apache.seatunnel.api.sink.DefaultSinkWriterContext;
 import org.apache.seatunnel.api.sink.SeaTunnelSink;
 import org.apache.seatunnel.api.sink.SinkCommitter;
 import org.apache.seatunnel.api.sink.SinkWriter;
+import org.apache.seatunnel.api.table.catalog.CatalogTable;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
+import org.apache.seatunnel.translation.spark.execution.MultiTableManager;
 
 import org.apache.spark.sql.catalyst.InternalRow;
 import org.apache.spark.sql.connector.write.DataWriter;
@@ -34,15 +36,24 @@ public class SeaTunnelSparkDataWriterFactory<CommitInfoT, StateT>
         implements DataWriterFactory, StreamingDataWriterFactory {
 
     private final SeaTunnelSink<SeaTunnelRow, StateT, CommitInfoT, ?> sink;
+    private final CatalogTable[] catalogTables;
+    private final String jobId;
+    private final int parallelism;
 
     public SeaTunnelSparkDataWriterFactory(
-            SeaTunnelSink<SeaTunnelRow, StateT, CommitInfoT, ?> sink) {
+            SeaTunnelSink<SeaTunnelRow, StateT, CommitInfoT, ?> sink,
+            CatalogTable[] catalogTables,
+            String jobId,
+            int parallelism) {
         this.sink = sink;
+        this.catalogTables = catalogTables;
+        this.jobId = jobId;
+        this.parallelism = parallelism;
     }
 
     @Override
     public DataWriter<InternalRow> createWriter(int partitionId, long taskId) {
-        SinkWriter.Context context = new DefaultSinkWriterContext((int) taskId);
+        SinkWriter.Context context = new DefaultSinkWriterContext(jobId, (int) taskId, parallelism);
         SinkWriter<SeaTunnelRow, CommitInfoT, StateT> writer;
         SinkCommitter<CommitInfoT> committer;
         try {
@@ -55,7 +66,8 @@ public class SeaTunnelSparkDataWriterFactory<CommitInfoT, StateT>
         } catch (IOException e) {
             throw new RuntimeException("Failed to create SinkCommitter.", e);
         }
-        return new SeaTunnelSparkDataWriter<>(writer, committer, sink.getConsumedType(), 0);
+        return new SeaTunnelSparkDataWriter<>(
+                writer, committer, new MultiTableManager(catalogTables), 0, context);
     }
 
     @Override

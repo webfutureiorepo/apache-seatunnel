@@ -137,12 +137,14 @@ class JobHistoryServiceTest extends AbstractSeaTunnelServerTest {
                         "Test",
                         nodeEngine.getSerializationService().toData(testLogicalDag),
                         testLogicalDag.getJobConfig(),
+                        Collections.emptyList(),
                         Collections.emptyList());
 
         Data data = nodeEngine.getSerializationService().toData(jobImmutableInformation);
 
         PassiveCompletableFuture<Void> voidPassiveCompletableFuture =
-                server.getCoordinatorService().submitJob(jobid, data);
+                server.getCoordinatorService()
+                        .submitJob(jobid, data, jobImmutableInformation.isStartWithSavePoint());
         voidPassiveCompletableFuture.join();
     }
 }

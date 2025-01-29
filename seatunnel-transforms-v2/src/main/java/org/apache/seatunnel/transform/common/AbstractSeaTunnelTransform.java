@@ -14,105 +14,95 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.seatunnel.transform.common;
 
-import org.apache.seatunnel.shade.com.typesafe.config.Config;
-
-import org.apache.seatunnel.api.common.CommonOptions;
-import org.apache.seatunnel.api.common.PrepareFailException;
 import org.apache.seatunnel.api.table.catalog.CatalogTable;
-import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
+import org.apache.seatunnel.api.table.catalog.TableIdentifier;
+import org.apache.seatunnel.api.table.catalog.TableSchema;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
-import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
 import org.apache.seatunnel.api.transform.SeaTunnelTransform;
+import org.apache.seatunnel.transform.exception.ErrorDataTransformException;
 
-import java.util.Objects;
+import lombok.NonNull;
+import lombok.extern.slf4j.Slf4j;
 
-public abstract class AbstractSeaTunnelTransform implements SeaTunnelTransform<SeaTunnelRow> {
+import java.util.Collections;
+import java.util.List;
 
-    private static final String RESULT_TABLE_NAME = CommonOptions.RESULT_TABLE_NAME.key();
-    private static final String SOURCE_TABLE_NAME = CommonOptions.SOURCE_TABLE_NAME.key();
+@Slf4j
+public abstract class AbstractSeaTunnelTransform<T, R> implements SeaTunnelTransform<T> {
 
-    protected String inputTableName;
-    protected SeaTunnelRowType inputRowType;
+    protected final ErrorHandleWay rowErrorHandleWay;
+    protected CatalogTable inputCatalogTable;
 
-    protected String outputTableName;
-    protected SeaTunnelRowType outputRowType;
+    protected volatile CatalogTable outputCatalogTable;
 
-    @Override
-    public void prepare(Config pluginConfig) throws PrepareFailException {
-        if (!pluginConfig.hasPath(SOURCE_TABLE_NAME)) {
-            throw new IllegalArgumentException(
-                    "The configuration missing key: " + SOURCE_TABLE_NAME);
+    public AbstractSeaTunnelTransform(@NonNull CatalogTable inputCatalogTable) {
+        this(inputCatalogTable, TransformCommonOptions.ROW_ERROR_HANDLE_WAY_OPTION.defaultValue());
+    }
+
+    public AbstractSeaTunnelTransform(
+            @NonNull CatalogTable inputCatalogTable, ErrorHandleWay rowErrorHandleWay) {
+        this.inputCatalogTable = inputCatalogTable;
+        this.rowErrorHandleWay = rowErrorHandleWay;
+    }
+
+    public CatalogTable getProducedCatalogTable() {
+        if (outputCatalogTable == null) {
+            synchronized (this) {
+                if (outputCatalogTable == null) {
+                    outputCatalogTable = transformCatalogTable();
+                }
+            }
         }
-        if (!pluginConfig.hasPath(RESULT_TABLE_NAME)) {
-            throw new IllegalArgumentException(
-                    "The configuration missing key: " + RESULT_TABLE_NAME);
+
+        return outputCatalogTable;
+    }
+
+    @Override
+    public List<CatalogTable> getProducedCatalogTables() {
+        return Collections.singletonList(getProducedCatalogTable());
+    }
+
+    private CatalogTable transformCatalogTable() {
+        TableIdentifier tableIdentifier = transformTableIdentifier();
+        TableSchema tableSchema = transformTableSchema();
+        return CatalogTable.of(
+                tableIdentifier,
+                tableSchema,
+                inputCatalogTable.getOptions(),
+                inputCatalogTable.getPartitionKeys(),
+                inputCatalogTable.getComment());
+    }
+
+    public R transform(SeaTunnelRow row) {
+        try {
+            return transformRow(row);
+        } catch (ErrorDataTransformException e) {
+            if (e.getErrorHandleWay() != null) {
+                ErrorHandleWay errorHandleWay = e.getErrorHandleWay();
+                if (errorHandleWay.allowSkipThisRow()) {
+                    log.debug("Skip row due to error", e);
+                    return null;
+                }
+                throw e;
+            }
+            if (rowErrorHandleWay.allowSkip()) {
+                log.debug("Skip row due to error", e);
+                return null;
+            }
+            throw e;
         }
-
-        this.inputTableName = pluginConfig.getString(SOURCE_TABLE_NAME);
-        this.outputTableName = pluginConfig.getString(RESULT_TABLE_NAME);
-        if (Objects.equals(inputTableName, outputTableName)) {
-            throw new IllegalArgumentException(
-                    "source and result cannot be equals: "
-                            + inputTableName
-                            + ", "
-                            + outputTableName);
-        }
-
-        setConfig(pluginConfig);
     }
-
-    @Override
-    public void setTypeInfo(SeaTunnelDataType<SeaTunnelRow> inputDataType) {
-        this.inputRowType = (SeaTunnelRowType) inputDataType;
-        this.outputRowType = transformRowType(clone(inputRowType));
-    }
-
-    @Override
-    public SeaTunnelDataType<SeaTunnelRow> getProducedType() {
-        return outputRowType;
-    }
-
-    @Override
-    public SeaTunnelRow map(SeaTunnelRow row) {
-        return transformRow(row);
-    }
-
-    protected abstract void setConfig(Config pluginConfig);
-
-    /**
-     * Outputs transformed row type.
-     *
-     * @param inputRowType upstream input row type
-     * @return
-     */
-    protected abstract SeaTunnelRowType transformRowType(SeaTunnelRowType inputRowType);
 
     /**
      * Outputs transformed row data.
      *
      * @param inputRow upstream input row data
-     * @return
      */
-    protected abstract SeaTunnelRow transformRow(SeaTunnelRow inputRow);
+    protected abstract R transformRow(SeaTunnelRow inputRow);
 
-    private static SeaTunnelRowType clone(SeaTunnelRowType rowType) {
-        String[] fieldNames = new String[rowType.getTotalFields()];
-        System.arraycopy(rowType.getFieldNames(), 0, fieldNames, 0, fieldNames.length);
+    protected abstract TableSchema transformTableSchema();
 
-        SeaTunnelDataType[] fieldTypes = new SeaTunnelDataType[rowType.getTotalFields()];
-        System.arraycopy(rowType.getFieldTypes(), 0, fieldTypes, 0, fieldTypes.length);
-
-        return new SeaTunnelRowType(fieldNames, fieldTypes);
-    }
-
-    @Override
-    public CatalogTable getProducedCatalogTable() {
-        throw new UnsupportedOperationException(
-                String.format(
-                        "Connector %s must implement TableTransformFactory.createTransform method",
-                        getPluginName()));
-    }
+    protected abstract TableIdentifier transformTableIdentifier();
 }

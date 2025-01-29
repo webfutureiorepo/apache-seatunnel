@@ -29,7 +29,7 @@ import org.apache.seatunnel.api.table.type.SeaTunnelDataType;
 import org.apache.seatunnel.api.table.type.SeaTunnelRow;
 import org.apache.seatunnel.api.table.type.SeaTunnelRowType;
 import org.apache.seatunnel.api.table.type.SqlType;
-import org.apache.seatunnel.common.exception.CommonErrorCode;
+import org.apache.seatunnel.common.exception.CommonErrorCodeDeprecated;
 import org.apache.seatunnel.format.json.exception.SeaTunnelJsonFormatException;
 
 import java.io.Serializable;
@@ -49,8 +49,15 @@ public class RowToJsonConverters implements Serializable {
 
     private static final long serialVersionUID = 6988876688930916940L;
 
+    private String nullValue;
+
     public RowToJsonConverter createConverter(SeaTunnelDataType<?> type) {
         return wrapIntoNullableConverter(createNotNullConverter(type));
+    }
+
+    public RowToJsonConverter createConverter(SeaTunnelDataType<?> type, String nullValue) {
+        this.nullValue = nullValue;
+        return createConverter(type);
     }
 
     private RowToJsonConverter wrapIntoNullableConverter(RowToJsonConverter converter) {
@@ -58,6 +65,9 @@ public class RowToJsonConverters implements Serializable {
             @Override
             public JsonNode convert(ObjectMapper mapper, JsonNode reuse, Object value) {
                 if (value == null) {
+                    if (nullValue != null) {
+                        return mapper.getNodeFactory().textNode(nullValue);
+                    }
                     return mapper.getNodeFactory().nullNode();
                 }
                 return converter.convert(mapper, reuse, value);
@@ -74,7 +84,9 @@ public class RowToJsonConverters implements Serializable {
                 return new RowToJsonConverter() {
                     @Override
                     public JsonNode convert(ObjectMapper mapper, JsonNode reuse, Object value) {
-                        return null;
+                        return nullValue == null
+                                ? null
+                                : mapper.getNodeFactory().textNode((String) value);
                     }
                 };
             case BOOLEAN:
@@ -175,11 +187,11 @@ public class RowToJsonConverters implements Serializable {
                 return createArrayConverter((ArrayType) type);
             case MAP:
                 MapType mapType = (MapType) type;
-                return createMapConverter(
-                        mapType.toString(), mapType.getKeyType(), mapType.getValueType());
+                return createMapConverter(mapType.getKeyType(), mapType.getValueType());
             default:
                 throw new SeaTunnelJsonFormatException(
-                        CommonErrorCode.UNSUPPORTED_DATA_TYPE, "unsupported parse type: " + type);
+                        CommonErrorCodeDeprecated.UNSUPPORTED_DATA_TYPE,
+                        "unsupported parse type: " + type);
         }
     }
 
@@ -257,15 +269,10 @@ public class RowToJsonConverters implements Serializable {
     }
 
     private RowToJsonConverter createMapConverter(
-            String typeSummary, SeaTunnelDataType<?> keyType, SeaTunnelDataType<?> valueType) {
-        if (!SqlType.STRING.equals(keyType.getSqlType())) {
-            throw new SeaTunnelJsonFormatException(
-                    CommonErrorCode.UNSUPPORTED_DATA_TYPE,
-                    "JSON format doesn't support non-string as key type of map. The type is: "
-                            + typeSummary);
-        }
-
+            SeaTunnelDataType<?> keyType, SeaTunnelDataType<?> valueType) {
+        final RowToJsonConverter keyConverter = createConverter(keyType);
         final RowToJsonConverter valueConverter = createConverter(valueType);
+
         return new RowToJsonConverter() {
             @Override
             public JsonNode convert(ObjectMapper mapper, JsonNode reuse, Object value) {
@@ -279,9 +286,12 @@ public class RowToJsonConverters implements Serializable {
                     node.removeAll();
                 }
 
-                Map<String, ?> mapData = (Map) value;
-                for (Map.Entry<String, ?> entry : mapData.entrySet()) {
-                    String fieldName = entry.getKey();
+                Map<?, ?> mapData = (Map) value;
+                for (Map.Entry<?, ?> entry : mapData.entrySet()) {
+                    // Convert the key to a string using the key converter
+                    JsonNode keyNode = keyConverter.convert(mapper, null, entry.getKey());
+                    String fieldName = keyNode.isTextual() ? keyNode.asText() : keyNode.toString();
+
                     node.set(
                             fieldName,
                             valueConverter.convert(mapper, node.get(fieldName), entry.getValue()));
